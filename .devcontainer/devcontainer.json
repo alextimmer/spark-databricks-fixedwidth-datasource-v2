@@ -1,0 +1,20 @@
+{
+  "name": "Spark 4 Scala 2.13 Devcontainer",
+  "dockerFile": "Dockerfile",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "scala-lang.scala",
+        "scalameta.metals",
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "ms-azuretools.vscode-docker",
+        "eamodio.gitlens",
+        "mhutchie.git-graph"
+      ]
+    }
+  },
+  "postCreateCommand": "echo 'Container ready!'",
+  "postCreateCommand": "find ./scripts -type f -exec sed -i 's/\\r$//' {} +",
+  "postStartCommand": "chmod +x ./scripts/start_jupyter.sh && chmod +x ./scripts/start_spark_jupyter.sh && chmod +x ./scripts/build_and_test.sh"
+}
