@@ -398,4 +398,126 @@ class MissingFunctionalitySpec extends AnyFunSuite {
     assert(FixedWidthConstants.OptionKeys.LINE_ENDING == "lineEnding",
       "LINE_ENDING constant should be defined")
   }
+
+  // ===========================================================================
+  // Rescued Data Column: _file_path controlled by Spark SQL config
+  // spark.databricks.sql.rescuedDataColumn.filePath.enabled
+  //
+  // These tests run LAST and reset the conf after each to avoid interference.
+  // ===========================================================================
+
+  private val filePathConfKey = "spark.databricks.sql.rescuedDataColumn.filePath.enabled"
+
+  /** Schema for reading invalid1.txt (name:String, id:IntegerType) */
+  private val rescuedTestSchema = StructType(Seq(
+    StructField("name", StringType, nullable = true),
+    StructField("id", IntegerType, nullable = true)
+  ))
+
+  /** Helper: read invalid1.txt with rescuedDataColumn and return rescued JSON from row 2 (the bad row) */
+  private def readRescuedJson(): String = {
+    val df = spark.read.format("fixedwidth-custom-scala")
+      .option("field_lengths", "0:5,5:10")
+      .option("mode", "PERMISSIVE")
+      .option("rescuedDataColumn", "_rescued_data")
+      .schema(rescuedTestSchema)
+      .load(s"$testDataPath/invalid1.txt")
+
+    val rows = df.collect()
+    // Row 2 ("Carol0000A") has "0000A" which fails IntegerType conversion
+    assert(!rows(2).isNullAt(rows(2).fieldIndex("_rescued_data")),
+      "Row 2 should have non-NULL _rescued_data for this test")
+    rows(2).getAs[String]("_rescued_data")
+  }
+
+  test("rescued data JSON includes _file_path by default (config not set)") {
+    // Ensure the config is unset (default behavior)
+    spark.conf.unset(filePathConfKey)
+
+    val json = readRescuedJson()
+    assert(json.contains("_file_path"),
+      s"Default behavior: rescued JSON should contain _file_path. Got: $json")
+    assert(json.contains("invalid1.txt"),
+      s"_file_path should reference the source file. Got: $json")
+  }
+
+  test("rescued data JSON includes _file_path when config explicitly true") {
+    try {
+      spark.conf.set(filePathConfKey, "true")
+
+      val json = readRescuedJson()
+      assert(json.contains("_file_path"),
+        s"With config=true: rescued JSON should contain _file_path. Got: $json")
+    } finally {
+      spark.conf.unset(filePathConfKey)
+    }
+  }
+
+  test("rescued data JSON excludes _file_path when config set to false") {
+    try {
+      spark.conf.set(filePathConfKey, "false")
+
+      val json = readRescuedJson()
+      assert(!json.contains("_file_path"),
+        s"With config=false: rescued JSON should NOT contain _file_path. Got: $json")
+      // The rescued field data must still be present
+      assert(json.contains("\"id\""),
+        s"Rescued JSON should still contain the rescued field 'id'. Got: $json")
+      assert(json.contains("0000A"),
+        s"Rescued JSON should still contain the malformed value '0000A'. Got: $json")
+    } finally {
+      spark.conf.unset(filePathConfKey)
+    }
+  }
+
+  test("rescued data for structural corruption excludes _file_path when config false") {
+    try {
+      spark.conf.set(filePathConfKey, "false")
+
+      // Create a schema expecting wider fields than the file provides → structural corruption
+      val wideSchema = StructType(Seq(
+        StructField("name", StringType, nullable = true),
+        StructField("id", StringType, nullable = true),
+        StructField("extra", StringType, nullable = true)
+      ))
+
+      val df = spark.read.format("fixedwidth-custom-scala")
+        .option("field_lengths", "0:5,5:10,10:15")
+        .option("mode", "PERMISSIVE")
+        .option("rescuedDataColumn", "_rescued_data")
+        .schema(wideSchema)
+        .load(s"$testDataPath/invalid1.txt")
+
+      val rows = df.collect()
+      // All rows are 10 chars wide but schema expects 15 → structurally corrupt
+      val rescuedRows = rows.filter(!_.isNullAt(rows(0).fieldIndex("_rescued_data")))
+      assert(rescuedRows.nonEmpty, "At least one row should have rescued data due to structural corruption")
+
+      rescuedRows.foreach { row =>
+        val json = row.getAs[String]("_rescued_data")
+        assert(!json.contains("_file_path"),
+          s"With config=false: structurally corrupt rescued JSON should NOT contain _file_path. Got: $json")
+      }
+    } finally {
+      spark.conf.unset(filePathConfKey)
+    }
+  }
+
+  test("config change takes effect across reads without restart") {
+    try {
+      // First read with config=false → no _file_path
+      spark.conf.set(filePathConfKey, "false")
+      val json1 = readRescuedJson()
+      assert(!json1.contains("_file_path"),
+        s"First read (config=false): should NOT contain _file_path. Got: $json1")
+
+      // Change config to true → _file_path should appear
+      spark.conf.set(filePathConfKey, "true")
+      val json2 = readRescuedJson()
+      assert(json2.contains("_file_path"),
+        s"Second read (config=true): should contain _file_path. Got: $json2")
+    } finally {
+      spark.conf.unset(filePathConfKey)
+    }
+  }
 }
