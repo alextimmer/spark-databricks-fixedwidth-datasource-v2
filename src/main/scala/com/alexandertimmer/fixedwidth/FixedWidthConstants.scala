@@ -101,6 +101,14 @@ object FixedWidthConstants {
   }
 
   // ===========================================================================
+  // Spark SQL Configuration Keys
+  // ===========================================================================
+
+  object SparkConfKeys {
+    val RESCUED_DATA_FILE_PATH_ENABLED = "spark.databricks.sql.rescuedDataColumn.filePath.enabled"
+  }
+
+  // ===========================================================================
   // Rescued Data JSON Field Names
   // ===========================================================================
 

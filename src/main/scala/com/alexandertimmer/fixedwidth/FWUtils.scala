@@ -442,17 +442,24 @@ object FWUtils {
   def buildRescuedDataFromBadIndices(parsed: Array[String],
                                      badIndices: Array[Int],
                                      fields: Array[StructField],
-                                     filePath: String): String = {
+                                     filePath: String,
+                                     includeFilePath: Boolean = true): String = {
     import com.fasterxml.jackson.databind.ObjectMapper
     import com.fasterxml.jackson.module.scala.DefaultScalaModule
 
     val mapper = new ObjectMapper().registerModule(DefaultScalaModule)
 
-    val rescuedMap = badIndices.flatMap { i =>
+    val fieldMap = badIndices.flatMap { i =>
       if (i < fields.length && i < parsed.length) {
         Some(fields(i).name -> parsed(i))
       } else None
-    }.toMap + ("_file_path" -> filePath)
+    }.toMap
+
+    val rescuedMap = if (includeFilePath) {
+      fieldMap + (FixedWidthConstants.RescuedDataFields.FILE_PATH -> filePath)
+    } else {
+      fieldMap
+    }
 
     mapper.writeValueAsString(rescuedMap)
   }

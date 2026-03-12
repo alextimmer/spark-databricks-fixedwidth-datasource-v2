@@ -228,6 +228,12 @@ class FixedWidthPartitionReader(
     if (schema.fieldNames.contains(DefaultCorruptCol)) Some(DefaultCorruptCol) else None
   )
 
+  // Read Spark SQL config to control whether _file_path is included in rescued data JSON
+  private val includeFilePathInRescuedData: Boolean = {
+    val confKey = FixedWidthConstants.SparkConfKeys.RESCUED_DATA_FILE_PATH_ENABLED
+    scala.util.Try(spark.conf.get(confKey)).toOption.forall(_ != "false")
+  }
+
   private val positions = FWUtils.parsePositionsFromString(fieldLengths)
 
   // Build mapping from parsed field index to schema index
@@ -366,7 +372,7 @@ class FixedWidthPartitionReader(
       findColIndex(col).foreach { idx =>
         if (needsRescue && badIndices.nonEmpty) {
           buf(idx) = UTF8String.fromString(
-            FWUtils.buildRescuedDataFromBadIndices(parsed, badIndices, dataFields, pathStr)
+            FWUtils.buildRescuedDataFromBadIndices(parsed, badIndices, dataFields, pathStr, includeFilePathInRescuedData)
           )
         } else if (isStructurallyCorrupt) {
           // Structural corruption without type failures - capture truncated fields
@@ -378,7 +384,7 @@ class FixedWidthPartitionReader(
           }.toArray
           if (truncatedIndices.nonEmpty) {
             buf(idx) = UTF8String.fromString(
-              FWUtils.buildRescuedDataFromBadIndices(parsed, truncatedIndices, dataFields, pathStr)
+              FWUtils.buildRescuedDataFromBadIndices(parsed, truncatedIndices, dataFields, pathStr, includeFilePathInRescuedData)
             )
           } else {
             buf(idx) = null
