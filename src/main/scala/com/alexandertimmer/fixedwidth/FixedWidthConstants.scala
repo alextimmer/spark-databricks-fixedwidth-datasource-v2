@@ -60,6 +60,15 @@ object FixedWidthConstants {
   /** Default field alignment (left-aligned, right-padded) */
   val DEFAULT_ALIGNMENT: String = "left"
 
+  /** Default string representation of NaN for Float/Double (matches CSV) */
+  val DEFAULT_NAN_VALUE: String = "NaN"
+
+  /** Default string representation of positive infinity (matches CSV) */
+  val DEFAULT_POSITIVE_INF: String = "Inf"
+
+  /** Default string representation of negative infinity (matches CSV) */
+  val DEFAULT_NEGATIVE_INF: String = "-Inf"
+
   // ===========================================================================
   // Parse Modes
   // ===========================================================================
@@ -98,6 +107,10 @@ object FixedWidthConstants {
     val ALIGNMENT = "alignment"
     val LINE_ENDING = "lineEnding"
     val SCHEMA_METADATA_WIDTHS = "schema_metadata_widths"
+    val EMPTY_VALUE = "emptyValue"
+    val NAN_VALUE = "nanValue"
+    val POSITIVE_INF = "positiveInf"
+    val NEGATIVE_INF = "negativeInf"
   }
 
   // ===========================================================================

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 package com.alexandertimmer.fixedwidth
 
-import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.connector.read._
 import org.apache.spark.sql.types.{StructType, StructField}
 import org.apache.spark.unsafe.types.UTF8String
+import org.apache.spark.util.SerializableConfiguration
+import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FSDataInputStream, Path}
+import org.apache.hadoop.io.compress.CompressionCodecFactory
 
 /**
  * Factory for creating partition readers for fixed-width files.
@@ -45,7 +47,13 @@ case class FixedWidthPartitionReaderFactory(
     dateFormat: Option[String] = None,
     timestampFormat: Option[String] = None,
     timeZone: Option[String] = None,
-    comment: Option[Char] = None
+    comment: Option[Char] = None,
+    hadoopConf: SerializableConfiguration,
+    includeFilePathInRescuedData: Boolean = true,
+    emptyValue: Option[String] = None,
+    nanValue: String = "NaN",
+    positiveInf: String = "Inf",
+    negativeInf: String = "-Inf"
 ) extends PartitionReaderFactory with Serializable {
 
   /**
@@ -74,7 +82,13 @@ case class FixedWidthPartitionReaderFactory(
       dateFormat = dateFormat,
       timestampFormat = timestampFormat,
       timeZone = timeZone,
-      comment = comment
+      comment = comment,
+      hadoopConf = hadoopConf.value,
+      includeFilePathInRescuedData = includeFilePathInRescuedData,
+      emptyValue = emptyValue,
+      nanValue = nanValue,
+      positiveInf = positiveInf,
+      negativeInf = negativeInf
     )
   }
 }
@@ -146,13 +160,15 @@ class FixedWidthPartitionReader(
     dateFormat: Option[String] = None,
     timestampFormat: Option[String] = None,
     timeZone: Option[String] = None,
-    comment: Option[Char] = None
+    comment: Option[Char] = None,
+    hadoopConf: Configuration,
+    includeFilePathInRescuedData: Boolean = true,
+    emptyValue: Option[String] = None,
+    nanValue: String = "NaN",
+    positiveInf: String = "Inf",
+    negativeInf: String = "-Inf"
 ) extends PartitionReader[InternalRow] {
 
-  import org.apache.hadoop.io.compress.CompressionCodecFactory
-
-  private val spark = SparkSession.active
-  private val hadoopConf = spark.sparkContext.hadoopConfiguration
   private val path = new Path(pathStr)
   private val fs = path.getFileSystem(hadoopConf)
 
@@ -227,12 +243,6 @@ class FixedWidthPartitionReader(
   private val corruptCol: Option[String] = columnNameOfCorruptRecord.orElse(
     if (schema.fieldNames.contains(DefaultCorruptCol)) Some(DefaultCorruptCol) else None
   )
-
-  // Read Spark SQL config to control whether _file_path is included in rescued data JSON
-  private val includeFilePathInRescuedData: Boolean = {
-    val confKey = FixedWidthConstants.SparkConfKeys.RESCUED_DATA_FILE_PATH_ENABLED
-    scala.util.Try(spark.conf.get(confKey)).toOption.forall(_ != "false")
-  }
 
   private val positions = FWUtils.parsePositionsFromString(fieldLengths)
 
@@ -310,7 +320,12 @@ class FixedWidthPartitionReader(
       // Apply nullValue check
       nullValue match {
         case Some(nv) if trimmed == nv => null
-        case _ => trimmed
+        case _ =>
+          // Apply emptyValue substitution (only for non-null, empty strings)
+          emptyValue match {
+            case Some(ev) if trimmed.isEmpty => ev
+            case _ => trimmed
+          }
       }
     }
   }
@@ -416,7 +431,7 @@ class FixedWidthPartitionReader(
         val parsed = extractAndTrimValues(line)
 
         // Cast values and track failures
-        val (casted, badIndices) = FWUtils.cast(parsed, dataFields, dateFormat, timestampFormat, timeZone)
+        val (casted, badIndices) = FWUtils.cast(parsed, dataFields, dateFormat, timestampFormat, timeZone, nanValue, positiveInf, negativeInf)
         val hasTypeConversionFailure = badIndices.nonEmpty
 
         // FAILFAST: throw on type conversion failures

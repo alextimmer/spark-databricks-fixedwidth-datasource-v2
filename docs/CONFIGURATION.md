@@ -35,12 +35,12 @@ df = spark.read.format("fixedwidth-custom-scala") \
 
 #### `field_lengths` (Primary)
 
-| Property | Value |
-|----------|-------|
+| Property     | Value                                        |
+|--------------|----------------------------------------------|
 | **Required** | Yes (unless `field_simple` or metadata used) |
-| **Default** | None |
-| **Type** | String |
-| **Format** | `"start:end,start:end,..."` |
+| **Default**  | None                                         |
+| **Type**     | String                                       |
+| **Format**   | `"start:end,start:end,..."`                  |
 
 Defines field positions using start and end byte offsets.
 
@@ -75,12 +75,12 @@ Field 3: "USD"        (positions 20-22)
 
 #### `field_simple` (Alternative)
 
-| Property | Value |
-|----------|-------|
+| Property     | Value                          |
+|--------------|--------------------------------|
 | **Required** | Alternative to `field_lengths` |
-| **Default** | None |
-| **Type** | String |
-| **Format** | `"width1,width2,width3,..."` |
+| **Default**  | None                           |
+| **Type**     | String                         |
+| **Format**   | `"width1,width2,width3,..."`   |
 
 Defines fields by width, starting at position 0.
 
@@ -127,20 +127,20 @@ df = spark.read.format("fixedwidth-custom-scala") \
 
 #### `mode`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"PERMISSIVE"` |
-| **Type** | String |
-| **Values** | `"PERMISSIVE"`, `"DROPMALFORMED"`, `"FAILFAST"` |
+| Property     | Value                                           |
+|--------------|-------------------------------------------------|
+| **Required** | No                                              |
+| **Default**  | `"PERMISSIVE"`                                  |
+| **Type**     | String                                          |
+| **Values**   | `"PERMISSIVE"`, `"DROPMALFORMED"`, `"FAILFAST"` |
 
 Controls behavior when encountering parse errors.
 
-| Mode | Behavior | Use Case |
-|------|----------|----------|
-| `PERMISSIVE` | Insert NULL for unparseable fields; populate rescue columns | Data exploration, ETL with error tracking |
-| `DROPMALFORMED` | Skip entire row on parse error | Data cleaning, strict pipelines |
-| `FAILFAST` | Throw exception on first error | Validation, strict data contracts |
+| Mode            | Behavior                                                    | Use Case                                  |
+|-----------------|-------------------------------------------------------------|-------------------------------------------|
+| `PERMISSIVE`    | Insert NULL for unparseable fields; populate rescue columns | Data exploration, ETL with error tracking |
+| `DROPMALFORMED` | Skip entire row on parse error                              | Data cleaning, strict pipelines           |
+| `FAILFAST`      | Throw exception on first error                              | Validation, strict data contracts         |
 
 **Examples:**
 ```python
@@ -161,22 +161,22 @@ Controls behavior when encountering parse errors.
 
 #### `columnNameOfCorruptRecord`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | None (uses `_corrupt_record` if in schema) |
-| **Type** | String |
+| Property     | Value                                      |
+|--------------|--------------------------------------------|
+| **Required** | No                                         |
+| **Default**  | None (uses `_corrupt_record` if in schema) |
+| **Type**     | String                                     |
 
 Column to store raw line content when parsing fails.
 
 **Behavior Matrix:**
 
-| Option Set | Column in Schema | Result |
-|------------|------------------|--------|
-| Yes | Yes | Populated with raw line on error |
-| Yes | No | **Silently dropped** (not auto-added) |
-| No | Yes (named `_corrupt_record`) | Auto-detected and used |
-| No | No | Not used |
+| Option Set | Column in Schema              | Result                                |
+|------------|-------------------------------|---------------------------------------|
+| Yes        | Yes                           | Populated with raw line on error      |
+| Yes        | No                            | **Silently dropped** (not auto-added) |
+| No         | Yes (named `_corrupt_record`) | Auto-detected and used                |
+| No         | No                            | Not used                              |
 
 **Example:**
 ```python
@@ -197,22 +197,22 @@ df = spark.read.format("fixedwidth-custom-scala") \
 
 #### `rescuedDataColumn`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | None (uses `_rescued_data` if in schema) |
-| **Type** | String |
+| Property     | Value                                    |
+|--------------|------------------------------------------|
+| **Required** | No                                       |
+| **Default**  | None (uses `_rescued_data` if in schema) |
+| **Type**     | String                                   |
 
 Column to store JSON payload with rescued field values.
 
 **Behavior Matrix:**
 
-| Option Set | Column in Schema | Result |
-|------------|------------------|--------|
-| Yes | No | **Auto-appended** to schema |
-| Yes | Yes | Populated with JSON on error |
-| No | Yes (named `_rescued_data`) | **NOT auto-detected** (column stays NULL) |
-| No | No | Not used |
+| Option Set | Column in Schema            | Result                                    |
+|------------|-----------------------------|-------------------------------------------|
+| Yes        | No                          | **Auto-appended** to schema               |
+| Yes        | Yes                         | Populated with JSON on error              |
+| No         | Yes (named `_rescued_data`) | **NOT auto-detected** (column stays NULL) |
+| No         | No                          | Not used                                  |
 
 **Critical Note:** Unlike `_corrupt_record`, the `_rescued_data` column is NOT auto-detected from the schema. You must explicitly set the `rescuedDataColumn` option to enable rescued data population.
 
@@ -243,24 +243,24 @@ df.filter("_rescued_data IS NOT NULL").show()
 
 #### `encoding`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"UTF-8"` |
-| **Type** | String |
+| Property     | Value     |
+|--------------|-----------|
+| **Required** | No        |
+| **Default**  | `"UTF-8"` |
+| **Type**     | String    |
 
 Character encoding for reading files.
 
 **Common Values:**
 
-| Encoding | Description |
-|----------|-------------|
-| `UTF-8` | Unicode (default, recommended) |
-| `UTF-16` | Unicode with BOM |
-| `ISO-8859-1` | Latin-1 (Western European) |
-| `windows-1252` | Windows Latin-1 |
-| `US-ASCII` | 7-bit ASCII |
-| `Cp1047` | EBCDIC (mainframe) |
+| Encoding       | Description                    |
+|----------------|--------------------------------|
+| `UTF-8`        | Unicode (default, recommended) |
+| `UTF-16`       | Unicode with BOM               |
+| `ISO-8859-1`   | Latin-1 (Western European)     |
+| `windows-1252` | Windows Latin-1                |
+| `US-ASCII`     | 7-bit ASCII                    |
+| `Cp1047`       | EBCDIC (mainframe)             |
 
 **Examples:**
 ```python
@@ -280,11 +280,11 @@ Character encoding for reading files.
 
 #### `skip_lines`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `0` |
-| **Type** | Integer |
+| Property     | Value   |
+|--------------|---------|
+| **Required** | No      |
+| **Default**  | `0`     |
+| **Type**     | Integer |
 
 Number of lines to skip at the beginning of each file.
 
@@ -302,11 +302,11 @@ Number of lines to skip at the beginning of each file.
 
 #### `header`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"false"` |
-| **Type** | Boolean String |
+| Property     | Value          |
+|--------------|----------------|
+| **Required** | No             |
+| **Default**  | `"false"`      |
+| **Type**     | Boolean String |
 
 Convenience option equivalent to `skip_lines=1`.
 
@@ -320,11 +320,11 @@ Convenience option equivalent to `skip_lines=1`.
 
 #### `trimValues`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"true"` |
-| **Type** | Boolean String |
+| Property     | Value          |
+|--------------|----------------|
+| **Required** | No             |
+| **Default**  | `"true"`       |
+| **Type**     | Boolean String |
 
 Trim leading and trailing whitespace from all field values.
 
@@ -340,11 +340,11 @@ Trim leading and trailing whitespace from all field values.
 
 #### `ignoreLeadingWhiteSpace`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"true"` |
-| **Type** | Boolean String |
+| Property     | Value          |
+|--------------|----------------|
+| **Required** | No             |
+| **Default**  | `"true"`       |
+| **Type**     | Boolean String |
 
 Trim only leading whitespace from field values.
 
@@ -352,11 +352,11 @@ Trim only leading whitespace from field values.
 
 #### `ignoreTrailingWhiteSpace`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"true"` |
-| **Type** | Boolean String |
+| Property     | Value          |
+|--------------|----------------|
+| **Required** | No             |
+| **Default**  | `"true"`       |
+| **Type**     | Boolean String |
 
 Trim only trailing whitespace from field values.
 
@@ -370,11 +370,11 @@ Trim only trailing whitespace from field values.
 
 #### `nullValue`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | None (no substitution) |
-| **Type** | String |
+| Property     | Value                  |
+|--------------|------------------------|
+| **Required** | No                     |
+| **Default**  | None (no substitution) |
+| **Type**     | String                 |
 
 String value to interpret as SQL NULL.
 
@@ -400,22 +400,22 @@ String value to interpret as SQL NULL.
 
 #### `dateFormat`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"yyyy-MM-dd"` |
-| **Type** | String (Java DateTimeFormatter pattern) |
+| Property     | Value                                   |
+|--------------|-----------------------------------------|
+| **Required** | No                                      |
+| **Default**  | `"yyyy-MM-dd"`                          |
+| **Type**     | String (Java DateTimeFormatter pattern) |
 
 Format pattern for parsing `DateType` columns.
 
 **Common Patterns:**
 
-| Pattern | Example Input | Result |
-|---------|---------------|--------|
-| `yyyy-MM-dd` | `2025-01-15` | 2025-01-15 |
-| `dd/MM/yyyy` | `15/01/2025` | 2025-01-15 |
-| `MM-dd-yyyy` | `01-15-2025` | 2025-01-15 |
-| `yyyyMMdd` | `20250115` | 2025-01-15 |
+| Pattern       | Example Input | Result     |
+|---------------|---------------|------------|
+| `yyyy-MM-dd`  | `2025-01-15`  | 2025-01-15 |
+| `dd/MM/yyyy`  | `15/01/2025`  | 2025-01-15 |
+| `MM-dd-yyyy`  | `01-15-2025`  | 2025-01-15 |
+| `yyyyMMdd`    | `20250115`    | 2025-01-15 |
 | `dd-MMM-yyyy` | `15-Jan-2025` | 2025-01-15 |
 
 ```python
@@ -426,22 +426,22 @@ Format pattern for parsing `DateType` columns.
 
 #### `timestampFormat`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"yyyy-MM-dd'T'HH:mm:ss"` |
-| **Type** | String (Java DateTimeFormatter pattern) |
+| Property     | Value                                   |
+|--------------|-----------------------------------------|
+| **Required** | No                                      |
+| **Default**  | `"yyyy-MM-dd'T'HH:mm:ss"`               |
+| **Type**     | String (Java DateTimeFormatter pattern) |
 
 Format pattern for parsing `TimestampType` columns.
 
 **Common Patterns:**
 
-| Pattern | Example Input |
-|---------|---------------|
-| `yyyy-MM-dd'T'HH:mm:ss` | `2025-01-15T10:30:00` |
-| `yyyy-MM-dd HH:mm:ss` | `2025-01-15 10:30:00` |
-| `dd/MM/yyyy HH:mm:ss` | `15/01/2025 10:30:00` |
-| `yyyyMMddHHmmss` | `20250115103000` |
+| Pattern                    | Example Input              |
+|----------------------------|----------------------------|
+| `yyyy-MM-dd'T'HH:mm:ss`    | `2025-01-15T10:30:00`      |
+| `yyyy-MM-dd HH:mm:ss`      | `2025-01-15 10:30:00`      |
+| `dd/MM/yyyy HH:mm:ss`      | `15/01/2025 10:30:00`      |
+| `yyyyMMddHHmmss`           | `20250115103000`           |
 | `dd-MMM-yyyy HH:mm:ss.SSS` | `15-Jan-2025 10:30:00.123` |
 
 ```python
@@ -452,25 +452,25 @@ Format pattern for parsing `TimestampType` columns.
 
 #### `timeZone`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"UTC"` |
-| **Type** | String (Java TimeZone ID) |
+| Property     | Value                     |
+|--------------|---------------------------|
+| **Required** | No                        |
+| **Default**  | `"UTC"`                   |
+| **Type**     | String (Java TimeZone ID) |
 
 Timezone for interpreting date/timestamp values.
 
 **Common Values:**
 
-| Timezone ID | Description |
-|-------------|-------------|
-| `UTC` | Coordinated Universal Time |
-| `America/New_York` | US Eastern |
-| `America/Los_Angeles` | US Pacific |
-| `Europe/London` | UK |
-| `Europe/Berlin` | Central European |
-| `Asia/Tokyo` | Japan |
-| `+05:30` | UTC offset format |
+| Timezone ID           | Description                |
+|-----------------------|----------------------------|
+| `UTC`                 | Coordinated Universal Time |
+| `America/New_York`    | US Eastern                 |
+| `America/Los_Angeles` | US Pacific                 |
+| `Europe/London`       | UK                         |
+| `Europe/Berlin`       | Central European           |
+| `Asia/Tokyo`          | Japan                      |
+| `+05:30`              | UTC offset format          |
 
 ```python
 .option("timeZone", "America/New_York")
@@ -482,11 +482,11 @@ Timezone for interpreting date/timestamp values.
 
 #### `comment`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | None (no comment handling) |
-| **Type** | Single character |
+| Property     | Value                      |
+|--------------|----------------------------|
+| **Required** | No                         |
+| **Default**  | None (no comment handling) |
+| **Type**     | Single character           |
 
 Character that marks comment lines to skip.
 
@@ -509,22 +509,22 @@ Character that marks comment lines to skip.
 
 #### `maxPartitionBytes`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `134217728` (128 MB) |
-| **Type** | Long (bytes) |
+| Property     | Value                |
+|--------------|----------------------|
+| **Required** | No                   |
+| **Default**  | `134217728` (128 MB) |
+| **Type**     | Long (bytes)         |
 
 Maximum bytes per partition for splitting large files.
 
 **Recommendations:**
 
-| File Size | Recommended Setting |
-|-----------|---------------------|
-| < 128 MB | Default (single partition) |
-| 128 MB - 1 GB | Default (auto-split) |
-| > 1 GB | Consider increasing to 256 MB |
-| > 10 GB | Tune based on cluster resources |
+| File Size     | Recommended Setting             |
+|---------------|---------------------------------|
+| < 128 MB      | Default (single partition)      |
+| 128 MB - 1 GB | Default (auto-split)            |
+| > 1 GB        | Consider increasing to 256 MB   |
+| > 10 GB       | Tune based on cluster resources |
 
 ```python
 # 64 MB partitions (more parallelism)
@@ -538,11 +538,11 @@ Maximum bytes per partition for splitting large files.
 
 #### `numPartitions`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | Auto-calculated |
-| **Type** | Integer |
+| Property     | Value           |
+|--------------|-----------------|
+| **Required** | No              |
+| **Default**  | Auto-calculated |
+| **Type**     | Integer         |
 
 Override: exact number of partitions for single-file reads.
 
@@ -564,11 +564,11 @@ Options specific to the write path (`df.write.format("fixedwidth-custom-scala")`
 
 ### `paddingChar`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `" "` (space) |
-| **Type** | Single character |
+| Property     | Value            |
+|--------------|------------------|
+| **Required** | No               |
+| **Default**  | `" "` (space)    |
+| **Type**     | Single character |
 
 Character used to pad field values to their required width.
 
@@ -582,19 +582,19 @@ Character used to pad field values to their required width.
 
 ### `alignment`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | `"left"` |
-| **Type** | String |
-| **Values** | `"left"`, `"right"` |
+| Property     | Value               |
+|--------------|---------------------|
+| **Required** | No                  |
+| **Default**  | `"left"`            |
+| **Type**     | String              |
+| **Values**   | `"left"`, `"right"` |
 
 Controls alignment of field values within their fixed-width columns.
 
 | Alignment | Value `"42"` in 6-char field | Padding Position |
-|-----------|-------------------------------|-----------------|
-| `left` | `"42    "` | Right side |
-| `right` | `"    42"` | Left side |
+|-----------|------------------------------|------------------|
+| `left`    | `"42    "`                   | Right side       |
+| `right`   | `"    42"`                   | Left side        |
 
 ```python
 # Right-aligned with zero-padding (common for numeric fields)
@@ -607,11 +607,11 @@ Controls alignment of field values within their fixed-width columns.
 
 ### `lineEnding`
 
-| Property | Value |
-|----------|-------|
-| **Required** | No |
-| **Default** | System line separator (`System.lineSeparator()`) |
-| **Type** | String |
+| Property     | Value                                            |
+|--------------|--------------------------------------------------|
+| **Required** | No                                               |
+| **Default**  | System line separator (`System.lineSeparator()`) |
+| **Type**     | String                                           |
 
 Line ending sequence appended after each row.
 
@@ -626,12 +626,12 @@ Line ending sequence appended after each row.
 
 The following options apply to both read and write paths:
 
-| Option | Read Default | Write Default | Description |
-|--------|-------------|---------------|-------------|
-| `field_lengths` | — | — | Field positions (required) |
-| `dateFormat` | `yyyy-MM-dd` | `yyyy-MM-dd` | Date formatting pattern |
-| `timestampFormat` | `yyyy-MM-dd'T'HH:mm:ss` | `yyyy-MM-dd HH:mm:ss` | Timestamp formatting pattern |
-| `timeZone` | `UTC` | `UTC` | Timezone for date/timestamp values |
+| Option            | Read Default            | Write Default         | Description                        |
+|-------------------|-------------------------|-----------------------|------------------------------------|
+| `field_lengths`   | —                       | —                     | Field positions (required)         |
+| `dateFormat`      | `yyyy-MM-dd`            | `yyyy-MM-dd`          | Date formatting pattern            |
+| `timestampFormat` | `yyyy-MM-dd'T'HH:mm:ss` | `yyyy-MM-dd HH:mm:ss` | Timestamp formatting pattern       |
+| `timeZone`        | `UTC`                   | `UTC`                 | Timezone for date/timestamp values |
 
 > **Note:** The writer uses a different default for `timestampFormat` (space separator instead of `T`), which is more common for fixed-width output files.
 
@@ -790,6 +790,66 @@ df.write.format("fixedwidth-custom-scala") \
 2. **Use `df.printSchema()`** - Verify schema resolution
 3. **Check `_rescued_data`** - Identify parsing issues
 4. **Enable Spark logging** - For detailed diagnostics
+
+---
+
+## CSV Option Compatibility
+
+The following table maps every standard Spark CSV reader/writer option to its status in this fixed-width data source. Options are categorized as **Supported**, **Not Applicable** (N/A), or **Not Yet Implemented**.
+
+### Supported Options
+
+| CSV Option                  | Fixed-Width Option          | Default                       | Notes                                           |
+|-----------------------------|-----------------------------|-------------------------------|-------------------------------------------------|
+| `encoding` / `charset`      | `encoding`                  | `UTF-8`                       | Any Java `Charset` name                         |
+| `comment`                   | `comment`                   | None                          | Single character; skips matching lines          |
+| `header`                    | `header` / `skip_lines`     | `false` / `0`                 | `header=true` equivalent to `skip_lines=1`      |
+| `mode`                      | `mode`                      | `PERMISSIVE`                  | `PERMISSIVE`, `DROPMALFORMED`, `FAILFAST`       |
+| `columnNameOfCorruptRecord` | `columnNameOfCorruptRecord` | Auto-detect `_corrupt_record` | Auto-detected if column exists in schema        |
+| `rescuedDataColumn`         | `rescuedDataColumn`         | None                          | Must be explicitly set; auto-appended to schema |
+| `nullValue`                 | `nullValue`                 | None                          | String interpreted as SQL NULL                  |
+| `emptyValue`                | `emptyValue`                | `""` (empty string)           | Substituted for empty fields (StringType only)  |
+| `nanValue`                  | `nanValue`                  | `NaN`                         | String parsed as Float/Double NaN               |
+| `positiveInf`               | `positiveInf`               | `Inf`                         | String parsed as positive infinity              |
+| `negativeInf`               | `negativeInf`               | `-Inf`                        | String parsed as negative infinity              |
+| `ignoreLeadingWhiteSpace`   | `ignoreLeadingWhiteSpace`   | `true`                        | Trim leading whitespace (read and write)        |
+| `ignoreTrailingWhiteSpace`  | `ignoreTrailingWhiteSpace`  | `true`                        | Trim trailing whitespace (read and write)       |
+| `dateFormat`                | `dateFormat`                | `yyyy-MM-dd`                  | Java `DateTimeFormatter` pattern                |
+| `timestampFormat`           | `timestampFormat`           | `yyyy-MM-dd HH:mm:ss`         | Java `DateTimeFormatter` pattern                |
+| `timeZone`                  | `timeZone`                  | `UTC`                         | Java `ZoneId` string                            |
+
+### Not Applicable (N/A)
+
+These CSV options have no meaningful equivalent for fixed-width files.
+
+| CSV Option                  | Reason                                             |
+|-----------------------------|----------------------------------------------------|
+| `sep` / `delimiter`         | Fixed-width uses positional fields, not delimiters |
+| `quote`                     | No quoting in fixed-width format                   |
+| `quoteAll`                  | No quoting in fixed-width format                   |
+| `escape`                    | No escape characters in fixed-width format         |
+| `escapeQuotes`              | No quoting in fixed-width format                   |
+| `charToEscapeQuoteEscaping` | No quoting in fixed-width format                   |
+| `multiLine`                 | Fixed-width rows are always single-line            |
+| `maxColumns`                | Column count is defined by field positions         |
+| `maxCharsPerColumn`         | Field width is defined by field positions          |
+| `unescapedQuoteHandling`    | No quoting in fixed-width format                   |
+| `samplingRatio`             | No schema inference sampling needed                |
+
+### Not Yet Implemented
+
+These options could be useful but are not yet supported.
+
+| CSV Option                      | Priority | Notes                                                                                  |
+|---------------------------------|----------|----------------------------------------------------------------------------------------|
+| `inferSchema`                   | Low      | Type inference from data; currently requires explicit schema or defaults to StringType |
+| `locale`                        | Low      | Locale-sensitive number/date parsing (e.g., `de_DE` for comma decimals)                |
+| `lineSep`                       | Medium   | Custom line separator for reading (write-side `lineEnding` is supported)               |
+| `timestampNTZFormat`            | Low      | Timestamp without timezone format                                                      |
+| `enforceSchema`                 | Low      | Schema enforcement vs. schema merging                                                  |
+| `preferDate`                    | Low      | Prefer DateType over TimestampType during inference                                    |
+| `enableDateTimeParsingFallback` | Low      | Fallback parsing for ambiguous date/time strings                                       |
+| `compression`                   | Low      | Explicit compression codec option (auto-detection via file extension works)            |
 
 ---
 

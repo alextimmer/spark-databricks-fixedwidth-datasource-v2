@@ -367,6 +367,60 @@ Trim trailing whitespace from field values.
 | **Default** | `"true"` |
 | **Values** | `"true"`, `"false"` |
 
+### Empty and Special Value Options
+
+#### `emptyValue`
+
+Value to substitute for empty StringType fields (after trim).
+
+| Property | Value |
+|----------|-------|
+| **Default** | `""` (empty string) |
+| **Type** | String |
+
+```python
+.option("emptyValue", "N/A")   # Empty fields become "N/A"
+```
+
+**Behavior:**
+- Only applies to `StringType` columns
+- `nullValue` takes precedence over `emptyValue`
+- On write: if a StringType value matches `emptyValue`, written as empty (all padding)
+
+#### `nanValue`
+
+String parsed as Float/Double NaN.
+
+| Property | Value |
+|----------|-------|
+| **Default** | `"NaN"` |
+| **Type** | String |
+
+#### `positiveInf`
+
+String parsed as positive infinity for Float/Double.
+
+| Property | Value |
+|----------|-------|
+| **Default** | `"Inf"` |
+| **Type** | String |
+
+#### `negativeInf`
+
+String parsed as negative infinity for Float/Double.
+
+| Property | Value |
+|----------|-------|
+| **Default** | `"-Inf"` |
+| **Type** | String |
+
+```python
+# Custom NaN/Inf strings
+.option("nanValue", "MISSING")
+.option("positiveInf", "+Infinity")
+.option("negativeInf", "-Infinity")
+```
+
 ### Null Value Options
 
 #### `nullValue`
@@ -535,8 +589,8 @@ schema = StructType([
 | `StringType` | Any text | As-is |
 | `IntegerType` | Integer (`"12345"`) | `toString` |
 | `LongType` | Long (`"9876543210"`) | `toString` |
-| `FloatType` | Float (`"123.45"`) | `toString` |
-| `DoubleType` | Double (`"123.456789"`) | `toString` |
+| `FloatType` | Float (`"123.45"`, `nanValue`, `positiveInf`, `negativeInf`) | Configured NaN/Inf strings, else `toString` |
+| `DoubleType` | Double (`"123.456789"`, `nanValue`, `positiveInf`, `negativeInf`) | Configured NaN/Inf strings, else `toString` |
 | `DecimalType(p,s)` | Decimal (`"12345.67"`) | `toPlainString` (no scientific notation) |
 | `BooleanType` | `"true"` / `"false"` | `toString` |
 | `DateType` | Configurable via `dateFormat` | Configurable via `dateFormat` |
@@ -749,4 +803,3 @@ df.write.format("fixedwidth-custom-scala") \
 - [Configuration Guide](CONFIGURATION.md)
 - [Architecture](ARCHITECTURE.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
-- [Feature Roadmap](FEATURE_ROADMAP.md)

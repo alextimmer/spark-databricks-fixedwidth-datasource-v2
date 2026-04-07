@@ -47,6 +47,16 @@ case class FixedWidthDataWriter(
     .getOrElse(FixedWidthConstants.DEFAULT_PADDING_CHAR)
   private val alignment: String = opts.getOrElse(Keys.ALIGNMENT.toLowerCase, FixedWidthConstants.DEFAULT_ALIGNMENT)
   private val lineEnding: Option[String] = opts.get(Keys.LINE_ENDING.toLowerCase)
+  private val emptyValue: Option[String] = opts.get(Keys.EMPTY_VALUE.toLowerCase)
+  private val nanValue: String = opts.getOrElse(Keys.NAN_VALUE.toLowerCase, FixedWidthConstants.DEFAULT_NAN_VALUE)
+  private val positiveInf: String = opts.getOrElse(Keys.POSITIVE_INF.toLowerCase, FixedWidthConstants.DEFAULT_POSITIVE_INF)
+  private val negativeInf: String = opts.getOrElse(Keys.NEGATIVE_INF.toLowerCase, FixedWidthConstants.DEFAULT_NEGATIVE_INF)
+
+  // Write-side trim options (CSV defaults both to true for writing)
+  private val ignoreLeadingWhiteSpace: Boolean =
+    opts.get(Keys.IGNORE_LEADING_WHITE_SPACE.toLowerCase).map(_.toBoolean).getOrElse(true)
+  private val ignoreTrailingWhiteSpace: Boolean =
+    opts.get(Keys.IGNORE_TRAILING_WHITE_SPACE.toLowerCase).map(_.toBoolean).getOrElse(true)
 
   private val dateFormat: String = opts.getOrElse(Keys.DATE_FORMAT.toLowerCase, "yyyy-MM-dd")
   private val timestampFormat: String = opts.getOrElse(Keys.TIMESTAMP_FORMAT.toLowerCase, "yyyy-MM-dd HH:mm:ss")
@@ -112,14 +122,27 @@ case class FixedWidthDataWriter(
    * Truncates if value exceeds field width.
    */
   private def formatValue(value: Any, width: Int, dataType: DataType): String = {
-    val strValue = if (value == null) "" else value.toString
-    if (strValue.length >= width) {
-      strValue.substring(0, width)
+    // If StringType value matches emptyValue, write as empty (all padding)
+    val strValue = if (value == null) "" else {
+      emptyValue match {
+        case Some(ev) if dataType == StringType && value.toString == ev => ""
+        case _ => value.toString
+      }
+    }
+    // Apply write-side trim before padding
+    val trimmed = (ignoreLeadingWhiteSpace, ignoreTrailingWhiteSpace) match {
+      case (true, true)   => strValue.trim
+      case (true, false)  => strValue.replaceAll("^\\s+", "")
+      case (false, true)  => strValue.replaceAll("\\s+$", "")
+      case (false, false) => strValue
+    }
+    if (trimmed.length >= width) {
+      trimmed.substring(0, width)
     } else {
-      val pad = paddingChar.toString * (width - strValue.length)
+      val pad = paddingChar.toString * (width - trimmed.length)
       alignment match {
-        case "right" => pad + strValue
-        case _       => strValue + pad
+        case "right" => pad + trimmed
+        case _       => trimmed + pad
       }
     }
   }
@@ -134,8 +157,18 @@ case class FixedWidthDataWriter(
           case StringType    => record.getString(i)
           case IntegerType   => record.getInt(i)
           case LongType      => record.getLong(i)
-          case DoubleType    => record.getDouble(i)
-          case FloatType     => record.getFloat(i)
+          case DoubleType    =>
+            val d = record.getDouble(i)
+            if (d.isNaN) nanValue
+            else if (d.isPosInfinity) positiveInf
+            else if (d.isNegInfinity) negativeInf
+            else d
+          case FloatType     =>
+            val f = record.getFloat(i)
+            if (f.isNaN) nanValue
+            else if (f.isPosInfinity) positiveInf
+            else if (f.isNegInfinity) negativeInf
+            else f
           case BooleanType   => record.getBoolean(i)
           case d: DecimalType =>
             record.getDecimal(i, d.precision, d.scale).toJavaBigDecimal.toPlainString

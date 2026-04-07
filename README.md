@@ -14,6 +14,7 @@ A custom Apache Spark Data Source V2 for reading and writing fixed-width formatt
 - **Rescued data column support** — JSON payload with malformed field values and file path
 - **Corrupt record handling** — Raw line capture for debugging
 - **Comprehensive type support** — String, Int, Long, Float, Double, Decimal, Boolean, Date, Timestamp with graceful NULL fallback
+- **CSV-compatible options** — `emptyValue`, `nanValue`, `positiveInf`, `negativeInf` matching Spark CSV behavior
 - **Configurable formatting** — Custom date/timestamp formats, timezone, null values, trim/whitespace control, comment lines
 - **Flexible field definition** — `field_lengths` (start:end), `field_simple` (widths), or schema metadata
 - **Parallel processing** — Byte-based partitioning with `maxPartitionBytes` and `numPartitions`
@@ -209,6 +210,10 @@ If you get `Failed to find data source: fixedwidth-custom-scala`, the JAR is not
 | `ignoreLeadingWhiteSpace` | No | `true` | Trim only leading whitespace |
 | `ignoreTrailingWhiteSpace` | No | `true` | Trim only trailing whitespace |
 | `nullValue` | No | — | String value to interpret as SQL NULL (e.g., `""`, `"NULL"`, `"N/A"`) |
+| `emptyValue` | No | `""` | Value to substitute for empty StringType fields (after trim) |
+| `nanValue` | No | `NaN` | String parsed as Float/Double NaN |
+| `positiveInf` | No | `Inf` | String parsed as positive infinity |
+| `negativeInf` | No | `-Inf` | String parsed as negative infinity |
 | `dateFormat` | No | `yyyy-MM-dd` | Java DateTimeFormatter pattern for `DateType` columns |
 | `timestampFormat` | No | `yyyy-MM-dd'T'HH:mm:ss` | Java DateTimeFormatter pattern for `TimestampType` columns |
 | `timeZone` | No | `UTC` | Timezone for date/timestamp parsing |
@@ -227,6 +232,12 @@ If you get `Failed to find data source: fixedwidth-custom-scala`, the JAR is not
 | `paddingChar` | No | Space | Character used for padding fields to width |
 | `alignment` | No | `left` | Field alignment: `left` (right-pad) or `right` (left-pad) |
 | `lineEnding` | No | Platform | Line ending: `\n`, `\r\n`, or platform default |
+| `ignoreLeadingWhiteSpace` | No | `true` | Trim leading whitespace before padding |
+| `ignoreTrailingWhiteSpace` | No | `true` | Trim trailing whitespace before padding |
+| `emptyValue` | No | — | If StringType value matches, write as empty (all padding) |
+| `nanValue` | No | `NaN` | String written for Float/Double NaN |
+| `positiveInf` | No | `Inf` | String written for positive infinity |
+| `negativeInf` | No | `-Inf` | String written for negative infinity |
 | `dateFormat` | No | `yyyy-MM-dd` | Format pattern for writing `DateType` values |
 | `timestampFormat` | No | `yyyy-MM-dd HH:mm:ss` | Format pattern for writing `TimestampType` values |
 | `timeZone` | No | `UTC` | Timezone for date/timestamp formatting |
@@ -356,9 +367,9 @@ sparkfixedwidthdatasource-scala/
 │   │           └── org.apache.spark.sql.sources.DataSourceRegister
 │   └── test/
 │       └── scala/com/alexandertimmer/fixedwidth/
-│           ├── FixedWidthRelationSpec.scala       # Main unit tests (66 tests)
-│           ├── RefactoringValidationSpec.scala     # Refactoring validation
-│           └── MissingFunctionalitySpec.scala      # Writer enhancement tests (10 tests)
+│           ├── FixedWidthRelationSpec.scala              # Core read/write tests (54 tests)
+│           ├── FixedWidthDataSourceRegressionSpec.scala  # Regression tests (13 tests)
+│           └── MissingFunctionalitySpec.scala            # Writer + CSV options tests (37 tests)
 ├── data/test_data/                           # Sample fixed-width files
 ├── docs/                                     # Documentation
 ├── notebook/                                 # Jupyter notebooks for testing
@@ -456,9 +467,9 @@ target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar
 The test suite validates all CSV PERMISSIVE mode behaviors, reader options, writer features, and roundtrip correctness:
 
 ```
-Tests: succeeded 76, failed 0 (across 3 test classes)
+Tests: succeeded 104, failed 0 (across 3 test classes)
 
-FixedWidthRelationSpec (66 tests):
+FixedWidthRelationSpec (54 tests):
 - Core CSV PERMISSIVE mode scenarios (6 scenarios)
 - Type conversion: String, Int, Long, Float, Double, Boolean
 - Whitespace: trimValues, ignoreLeadingWhiteSpace, ignoreTrailingWhiteSpace
@@ -469,9 +480,16 @@ FixedWidthRelationSpec (66 tests):
 - Write support, schema metadata propagation
 - Header/skip_lines, encoding
 
-MissingFunctionalitySpec (10 tests):
+FixedWidthDataSourceRegressionSpec (13 tests):
+- Regression tests for core read/write roundtrips
+
+MissingFunctionalitySpec (37 tests):
 - Writer: paddingChar, alignment (left/right), lineEnding
 - Writer: DecimalType formatting, DateType/TimestampType roundtrip
+- Write-side trim: ignoreLeadingWhiteSpace, ignoreTrailingWhiteSpace
+- emptyValue: read substitution, write handling, roundtrip, nullValue precedence
+- nanValue/positiveInf/negativeInf: read parsing, write formatting, roundtrip
+- Rescued data: _file_path config (default, enabled, disabled, mid-session change)
 - Constants consolidation validation
 ```
 
@@ -582,7 +600,6 @@ These are not bugs or missing functionality — potential enhancements if use ca
 | Per-field alignment | Alignment specified per-field via schema metadata |
 | Write-path compression | Compress output files (gzip/bzip2) |
 | JSON/YAML schema definition | External schema definition file |
-| `emptyValue` option | Distinct from `nullValue` (Spark CSV parity) |
 | Column name inference from header | Parse first line as field names |
 | Batch-level error aggregation | Aggregate parse error counts per partition |
 

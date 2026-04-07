@@ -1,0 +1,5 @@
+Alice       NaN
+Bob         Inf
+Carol      -Inf
+Dave        1.5
+Eve         2.0

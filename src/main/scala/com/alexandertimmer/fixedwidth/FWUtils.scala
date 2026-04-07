@@ -349,7 +349,10 @@ object FWUtils {
            fields: Array[StructField],
            dateFormat: Option[String] = None,
            timestampFormat: Option[String] = None,
-           timeZone: Option[String] = None): (Array[Any], Array[Int]) = {
+           timeZone: Option[String] = None,
+           nanValue: String = "NaN",
+           positiveInf: String = "Inf",
+           negativeInf: String = "-Inf"): (Array[Any], Array[Int]) = {
 
     val out = new Array[Any](fields.length)
     val badIndices = scala.collection.mutable.ArrayBuffer[Int]()
@@ -375,8 +378,16 @@ object FWUtils {
             case StringType  => v
             case IntegerType => if (v.isEmpty) null else v.toInt
             case LongType    => if (v.isEmpty) null else v.toLong
-            case FloatType   => if (v.isEmpty) null else v.toFloat
-            case DoubleType  => if (v.isEmpty) null else v.toDouble
+            case FloatType   => if (v.isEmpty) null
+              else if (v == nanValue) Float.NaN
+              else if (v == positiveInf) Float.PositiveInfinity
+              else if (v == negativeInf) Float.NegativeInfinity
+              else v.toFloat
+            case DoubleType  => if (v.isEmpty) null
+              else if (v == nanValue) Double.NaN
+              else if (v == positiveInf) Double.PositiveInfinity
+              else if (v == negativeInf) Double.NegativeInfinity
+              else v.toDouble
             case BooleanType => if (v.isEmpty) null else v.toBoolean
             case DateType =>
               if (v.isEmpty) null else {

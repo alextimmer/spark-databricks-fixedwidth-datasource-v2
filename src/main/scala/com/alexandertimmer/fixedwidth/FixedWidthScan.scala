@@ -3,6 +3,7 @@ package com.alexandertimmer.fixedwidth
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.connector.read._
+import org.apache.spark.util.SerializableConfiguration
 import org.apache.hadoop.fs.Path
 
 import FixedWidthConstants._
@@ -175,6 +176,14 @@ case class FixedWidthScan(schema: org.apache.spark.sql.types.StructType,
    * @return factory for creating partition readers
    */
   override def createReaderFactory(): PartitionReaderFactory = {
+    // Resolve Hadoop config and Spark SQL config on the Driver (not available on Executors)
+    val spark = SparkSession.active
+    val serializableHadoopConf = new SerializableConfiguration(spark.sparkContext.hadoopConfiguration)
+    val includeFilePathInRescuedData: Boolean = {
+      val confKey = FixedWidthConstants.SparkConfKeys.RESCUED_DATA_FILE_PATH_ENABLED
+      scala.util.Try(spark.conf.get(confKey)).toOption.forall(_ != "false")
+    }
+
     // Resolve trim options:
     // - trimValues=true (default) enables both leading and trailing trim
     // - ignoreLeadingWhiteSpace/ignoreTrailingWhiteSpace override trimValues if set
@@ -216,7 +225,13 @@ case class FixedWidthScan(schema: org.apache.spark.sql.types.StructType,
       dateFormat = Option(options.get(Keys.DATE_FORMAT)),
       timestampFormat = Option(options.get(Keys.TIMESTAMP_FORMAT)),
       timeZone = Option(options.get(Keys.TIME_ZONE)),
-      comment = Option(options.get(Keys.COMMENT)).map(_.charAt(0))
+      comment = Option(options.get(Keys.COMMENT)).map(_.charAt(0)),
+      hadoopConf = serializableHadoopConf,
+      includeFilePathInRescuedData = includeFilePathInRescuedData,
+      emptyValue = Option(options.get(Keys.EMPTY_VALUE)),
+      nanValue = Option(options.get(Keys.NAN_VALUE)).getOrElse(DEFAULT_NAN_VALUE),
+      positiveInf = Option(options.get(Keys.POSITIVE_INF)).getOrElse(DEFAULT_POSITIVE_INF),
+      negativeInf = Option(options.get(Keys.NEGATIVE_INF)).getOrElse(DEFAULT_NEGATIVE_INF)
     )
   }
 }

@@ -291,9 +291,17 @@ case class FixedWidthPartitionReaderFactory(
   dateFormat: Option[String],
   timestampFormat: Option[String],
   timeZone: Option[String],
-  comment: Option[Char]
+  comment: Option[Char],
+  hadoopConf: SerializableConfiguration,       // Serialized Hadoop config (resolved on Driver)
+  includeFilePathInRescuedData: Boolean,        // From Spark SQL config
+  emptyValue: Option[String],                   // CSV-compatible empty value substitution
+  nanValue: String,                             // NaN string for Float/Double (default: "NaN")
+  positiveInf: String,                          // Positive infinity string (default: "Inf")
+  negativeInf: String                           // Negative infinity string (default: "-Inf")
 ) extends PartitionReaderFactory with Serializable
 ```
+
+> **Note:** `hadoopConf` and `includeFilePathInRescuedData` are resolved on the Driver in `createReaderFactory()` and serialized to executors via `SerializableConfiguration`, avoiding the anti-pattern of calling `SparkSession.active` on executors.
 
 ---
 
@@ -641,6 +649,5 @@ flowchart TD
 - [Spark DataSource V2 Guide](https://spark.apache.org/docs/latest/sql-data-sources.html)
 - [Spark Connector Development](https://spark.apache.org/docs/latest/sql-data-sources-developer-guide.html)
 - [Hadoop FileSystem API](https://hadoop.apache.org/docs/current/api/org/apache/hadoop/fs/FileSystem.html)
-- [Project Feature Roadmap](FEATURE_ROADMAP.md)
 - [API Reference](API_REFERENCE.md)
 - [Configuration Guide](CONFIGURATION.md)
