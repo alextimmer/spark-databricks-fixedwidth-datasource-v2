@@ -54,6 +54,9 @@ object FixedWidthConstants {
   /** Default number of partitions (auto-calculated when 0) */
   val DEFAULT_NUM_PARTITIONS: Int = 0
 
+  /** Default null value string (matches CSV: empty string = null) */
+  val DEFAULT_NULL_VALUE: String = ""
+
   /** Default padding character for fixed-width fields */
   val DEFAULT_PADDING_CHAR: Char = ' '
 

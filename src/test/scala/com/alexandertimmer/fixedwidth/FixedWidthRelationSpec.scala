@@ -728,7 +728,7 @@ class FixedWidthRelationSpec extends AnyFunSuite {
     assert(rows(2).isNullAt(rows(2).fieldIndex("name")), "Expected empty string to become null")
   }
 
-  test("nullValue not set: no special null handling, empty strings remain empty") {
+  test("nullValue not set: default matches CSV, empty strings become null") {
     val schema = StructType(Seq(
       StructField("name", StringType, nullable = true),
       StructField("id", IntegerType, nullable = true)
@@ -736,17 +736,18 @@ class FixedWidthRelationSpec extends AnyFunSuite {
 
     val df = spark.read.format("fixedwidth-custom-scala")
       .option("field_lengths", "0:5,5:10")
-      // No nullValue option
+      // No nullValue option — defaults to "" (CSV behavior)
       .schema(schema)
       .load(s"$testDataPath/nullvalue_test.txt")
 
     val rows = df.collect()
     assert(rows.length == 3)
 
-    // "NULL " -> "NULL" (just a string, not null)
+    // "NULL " -> "NULL" (just a string, not null — doesn't match "")
     assert(rows(1).getAs[String]("name") == "NULL")
-    // "     " -> "" (empty string, not null)
-    assert(rows(2).getAs[String]("name") == "")
+    // "     " -> "" -> matches default nullValue="" -> null (CSV behavior)
+    assert(rows(2).isNullAt(rows(2).fieldIndex("name")),
+      "Empty string should become null with default nullValue (CSV behavior)")
   }
 
   // ===========================================
@@ -1431,6 +1432,136 @@ class FixedWidthRelationSpec extends AnyFunSuite {
     // We verify by checking that reading works correctly
     val rows = df.collect()
     assert(rows.length == 3)
+  }
+
+  // ===========================================================================
+  // nullValue default: CSV parity (empty string → null)
+  // ===========================================================================
+
+  test("nullValue default matches CSV: trimmed-to-empty StringType field becomes null") {
+    val schema = StructType(Seq(
+      StructField("name", StringType, nullable = true),
+      StructField("id", IntegerType, nullable = true)
+    ))
+
+    val df = spark.read.format("fixedwidth-custom-scala")
+      .option("field_lengths", "0:5,5:10")
+      // No nullValue option — should default to "" like CSV
+      .schema(schema)
+      .load(s"$testDataPath/nullvalue_test.txt")
+
+    val rows = df.collect()
+    assert(rows.length == 3)
+    // "Alice" is not empty → not null
+    assert(rows(0).getAs[String]("name") == "Alice")
+    // "NULL " trimmed to "NULL" → not empty → not null
+    assert(rows(1).getAs[String]("name") == "NULL")
+    // "     " trimmed to "" → matches default nullValue="" → null
+    assert(rows(2).isNullAt(rows(2).fieldIndex("name")),
+      "Empty string after trimming should become null (CSV default nullValue=\"\")")
+  }
+
+  test("nullValue explicitly set to non-empty string overrides default") {
+    val schema = StructType(Seq(
+      StructField("name", StringType, nullable = true),
+      StructField("id", IntegerType, nullable = true)
+    ))
+
+    val df = spark.read.format("fixedwidth-custom-scala")
+      .option("field_lengths", "0:5,5:10")
+      .option("nullValue", "NULL")
+      .schema(schema)
+      .load(s"$testDataPath/nullvalue_test.txt")
+
+    val rows = df.collect()
+    // "NULL " trimmed to "NULL" → matches nullValue → null
+    assert(rows(1).isNullAt(rows(1).fieldIndex("name")),
+      "Trimmed 'NULL' should match explicit nullValue='NULL'")
+    // "     " trimmed to "" → does NOT match "NULL" → stays ""
+    assert(rows(2).getAs[String]("name") == "",
+      "Empty string should not match nullValue='NULL'")
+  }
+
+  test("emptyValue + default nullValue: nullValue takes precedence") {
+    val schema = StructType(Seq(
+      StructField("name", StringType, nullable = true),
+      StructField("id", IntegerType, nullable = true)
+    ))
+
+    val df = spark.read.format("fixedwidth-custom-scala")
+      .option("field_lengths", "0:5,5:10")
+      .option("emptyValue", "N/A")
+      // No nullValue → default "" takes precedence
+      .schema(schema)
+      .load(s"$testDataPath/nullvalue_test.txt")
+
+    val rows = df.collect()
+    // "     " trims to "" → matches default nullValue="" → null (NOT "N/A")
+    assert(rows(2).isNullAt(0),
+      "Default nullValue='' should take precedence over emptyValue")
+  }
+
+  // ===========================================================================
+  // Short line handling: fixed-width ≠ fixed-length
+  // ===========================================================================
+
+  test("PERMISSIVE mode: short line is readable, missing fields become null, NOT flagged corrupt") {
+    val schema = StructType(Seq(
+      StructField("name", StringType, nullable = true),
+      StructField("code", StringType, nullable = true),
+      StructField("_corrupt_record", StringType, nullable = true)
+    ))
+
+    val df = spark.read.format("fixedwidth-custom-scala")
+      .option("field_lengths", "0:10,10:15")
+      .option("mode", "PERMISSIVE")
+      .option("columnNameOfCorruptRecord", "_corrupt_record")
+      .schema(schema)
+      .load(s"$testDataPath/short_line_test.txt")
+
+    val rows = df.collect()
+    assert(rows.length == 3, s"Expected 3 rows, got ${rows.length}")
+
+    // Line 1 (15 chars): full — name="Alice", code="Hello"
+    assert(rows(0).getAs[String]("name") == "Alice")
+    assert(rows(0).getAs[String]("code") == "Hello")
+    assert(rows(0).isNullAt(rows(0).fieldIndex("_corrupt_record")),
+      "Full-length line should NOT be flagged corrupt")
+
+    // Line 2 (13 chars): code partially extracted "Hel" — NOT corrupt
+    assert(rows(1).getAs[String]("name") == "Bob")
+    assert(rows(1).getAs[String]("code") == "Hel")
+    assert(rows(1).isNullAt(rows(1).fieldIndex("_corrupt_record")),
+      "Short line should NOT be flagged as structurally corrupt")
+
+    // Line 3 (5 chars): code entirely missing — null, NOT corrupt
+    assert(rows(2).getAs[String]("name") == "Carol")
+    assert(rows(2).isNullAt(rows(2).fieldIndex("code")),
+      "Missing trailing field should be null")
+    assert(rows(2).isNullAt(rows(2).fieldIndex("_corrupt_record")),
+      "Short line should NOT be flagged as structurally corrupt")
+  }
+
+  test("PERMISSIVE mode: short line with rescuedDataColumn does NOT populate rescued data") {
+    val schema = StructType(Seq(
+      StructField("name", StringType, nullable = true),
+      StructField("code", StringType, nullable = true)
+    ))
+
+    val df = spark.read.format("fixedwidth-custom-scala")
+      .option("field_lengths", "0:10,10:15")
+      .option("mode", "PERMISSIVE")
+      .option("rescuedDataColumn", "_rescued_data")
+      .schema(schema)
+      .load(s"$testDataPath/short_line_test.txt")
+
+    val rows = df.collect()
+    assert(rows.length == 3)
+    // Short lines should NOT trigger rescued data — missing fields are just null
+    rows.foreach { row =>
+      assert(row.isNullAt(row.fieldIndex("_rescued_data")),
+        s"Short line should not populate _rescued_data, but got: ${row.getAs[String]("_rescued_data")}")
+    }
   }
 
 }

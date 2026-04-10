@@ -565,12 +565,14 @@ class MissingFunctionalitySpec extends AnyFunSuite {
 
   test("read emptyValue: empty StringType field substituted with emptyValue string") {
     // nullvalue_test.txt row 3: "     00003" — name field all spaces, trims to ""
+    // Must set nullValue to something that won't match "" so emptyValue can take effect
     val schema = StructType(Seq(
       StructField("name", StringType, nullable = true),
       StructField("id", IntegerType, nullable = true)
     ))
     val df = spark.read.format("fixedwidth-custom-scala")
       .option("field_lengths", "0:5,5:10")
+      .option("nullValue", "NULL")
       .option("emptyValue", "N/A")
       .schema(schema)
       .load(s"$testDataPath/nullvalue_test.txt")
@@ -580,7 +582,7 @@ class MissingFunctionalitySpec extends AnyFunSuite {
       s"Expected 'N/A' for empty field but got '${rows(2).getAs[String]("name")}'")
   }
 
-  test("read emptyValue: default leaves empty string as-is for StringType") {
+  test("read emptyValue: default nullValue makes empty StringType field null") {
     val schema = StructType(Seq(
       StructField("name", StringType, nullable = true),
       StructField("id", IntegerType, nullable = true)
@@ -591,9 +593,9 @@ class MissingFunctionalitySpec extends AnyFunSuite {
       .load(s"$testDataPath/nullvalue_test.txt")
 
     val rows = df.collect()
-    // Row 3 name: all spaces, trims to "", no emptyValue set → stays ""
-    assert(rows(2).getAs[String]("name") == "",
-      s"Expected empty string but got '${rows(2).getAs[String]("name")}'")
+    // Row 3 name: all spaces, trims to "" → matches default nullValue="" → null (CSV behavior)
+    assert(rows(2).isNullAt(0),
+      "Empty string should become null with default nullValue (CSV behavior)")
   }
 
   test("read emptyValue: non-StringType empty field still becomes null") {
@@ -660,6 +662,7 @@ class MissingFunctionalitySpec extends AnyFunSuite {
     val readDf = spark.read
       .format("fixedwidth-custom-scala")
       .option("field_lengths", "0:10,10:15")
+      .option("nullValue", "NULL")
       .option("emptyValue", "N/A")
       .schema(readSchema)
       .load(outputPath)
@@ -694,6 +697,7 @@ class MissingFunctionalitySpec extends AnyFunSuite {
 
   test("read emptyValue + trim: trimmed-to-empty field gets emptyValue substitution") {
     // nullvalue_test.txt row 3: "     00003" — name "     " trims to ""
+    // Must set nullValue to something that won't match "" so emptyValue can take effect
     val schema = StructType(Seq(
       StructField("name", StringType, nullable = true),
       StructField("id", IntegerType, nullable = true)
@@ -701,6 +705,7 @@ class MissingFunctionalitySpec extends AnyFunSuite {
     val df = spark.read.format("fixedwidth-custom-scala")
       .option("field_lengths", "0:5,5:10")
       .option("trimValues", "true")
+      .option("nullValue", "NULL")
       .option("emptyValue", "EMPTY")
       .schema(schema)
       .load(s"$testDataPath/nullvalue_test.txt")
@@ -983,36 +988,52 @@ class MissingFunctionalitySpec extends AnyFunSuite {
     }
   }
 
-  test("rescued data for structural corruption excludes _file_path when config false") {
+  test("rescued data for type conversion failure excludes _file_path when config false") {
     try {
       spark.conf.set(filePathConfKey, "false")
 
-      // Create a schema expecting wider fields than the file provides → structural corruption
-      val wideSchema = StructType(Seq(
-        StructField("name", StringType, nullable = true),
-        StructField("id", StringType, nullable = true),
-        StructField("extra", StringType, nullable = true)
-      ))
-
+      // invalid1.txt row 3 has "0000A" which fails IntegerType → type conversion rescued data
       val df = spark.read.format("fixedwidth-custom-scala")
-        .option("field_lengths", "0:5,5:10,10:15")
+        .option("field_lengths", "0:5,5:10")
         .option("mode", "PERMISSIVE")
         .option("rescuedDataColumn", "_rescued_data")
-        .schema(wideSchema)
+        .schema(rescuedTestSchema)
         .load(s"$testDataPath/invalid1.txt")
 
       val rows = df.collect()
-      // All rows are 10 chars wide but schema expects 15 → structurally corrupt
       val rescuedRows = rows.filter(!_.isNullAt(rows(0).fieldIndex("_rescued_data")))
-      assert(rescuedRows.nonEmpty, "At least one row should have rescued data due to structural corruption")
+      assert(rescuedRows.nonEmpty, "At least one row should have rescued data due to type conversion failure")
 
       rescuedRows.foreach { row =>
         val json = row.getAs[String]("_rescued_data")
         assert(!json.contains("_file_path"),
-          s"With config=false: structurally corrupt rescued JSON should NOT contain _file_path. Got: $json")
+          s"With config=false: rescued JSON should NOT contain _file_path. Got: $json")
       }
     } finally {
       spark.conf.unset(filePathConfKey)
+    }
+  }
+
+  test("short lines: wider field spec than file does NOT trigger rescued data") {
+    // Field spec 0:5,5:10,10:15 on 10-char file — extra field is just null, not rescued
+    val wideSchema = StructType(Seq(
+      StructField("name", StringType, nullable = true),
+      StructField("id", StringType, nullable = true),
+      StructField("extra", StringType, nullable = true)
+    ))
+
+    val df = spark.read.format("fixedwidth-custom-scala")
+      .option("field_lengths", "0:5,5:10,10:15")
+      .option("mode", "PERMISSIVE")
+      .option("rescuedDataColumn", "_rescued_data")
+      .schema(wideSchema)
+      .load(s"$testDataPath/invalid1.txt")
+
+    val rows = df.collect()
+    // Short lines are NOT structurally corrupt — extra field is just null
+    rows.foreach { row =>
+      assert(row.isNullAt(row.fieldIndex("extra")),
+        "Extra field beyond line length should be null")
     }
   }
 

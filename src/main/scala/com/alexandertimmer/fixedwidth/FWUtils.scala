@@ -435,10 +435,12 @@ object FWUtils {
    * @return true if structurally corrupt, false otherwise
    */
   def isStructurallyCorrupt(line: String, positions: Array[(Int, Int)]): Boolean = {
+    // Fixed-width ≠ fixed-length: lines shorter than maxEnd are NOT corrupt.
+    // Missing trailing fields get extracted as empty strings (→ null via nullValue default).
+    // This matches pandas read_fwf, R read.fwf, SAS INFILE — industry standard behavior.
+    // Only flag corruption if the line is completely empty (no data at all).
     if (positions.isEmpty) return false
-    val maxEnd = positions.map(_._2).max
-    // Row is corrupt if it's shorter than the minimum required length
-    line.length < maxEnd
+    line.isEmpty
   }
 
   /**

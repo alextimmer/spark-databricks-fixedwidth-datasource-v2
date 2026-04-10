@@ -255,21 +255,24 @@ class RefactoringValidationSpec extends AnyFunSuite with BeforeAndAfterAll with 
     val schema = StructType(Seq(
       StructField("name", StringType, nullable = true),
       StructField("age", IntegerType, nullable = true),
-      StructField("date", StringType, nullable = true),
-      StructField("_corrupt_record", StringType, nullable = true)
+      StructField("date", StringType, nullable = true)
     ))
 
     val df = spark.read.format("fixedwidth-custom-scala")
       .option("field_lengths", "0:10,10:15,15:25")
-      .option("columnNameOfCorruptRecord", "_corrupt_record")
       .schema(schema)
       .load(testFile.toString)
 
     val rows = df.collect()
     assert(rows.length == 3)
-    // At least one record should have corrupt data
-    val hasCorruptRecords = rows.exists(r => r.getAs[String]("_corrupt_record") != null)
-    assert(hasCorruptRecords, "Should detect incomplete records as corrupt")
+    // Short lines are NOT structurally corrupt (fixed-width ≠ fixed-length).
+    // Missing trailing fields become null.
+    assert(rows(0).getAs[String]("name") == "Alice")
+    assert(rows(1).getAs[String]("name") == "Bob")
+    assert(rows(2).getAs[String]("name") == "ShortLine")
+    // Row 3 "ShortLine" is only 9 chars — age (10:15) and date (15:25) are missing → null
+    assert(rows(2).isNullAt(rows(2).fieldIndex("age")), "Missing age field should be null")
+    assert(rows(2).isNullAt(rows(2).fieldIndex("date")), "Missing date field should be null")
   }
 
   // =====================================================
