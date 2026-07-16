@@ -17,9 +17,12 @@ A custom Apache Spark Data Source V2 for reading and writing fixed-width formatt
 - **CSV-compatible options** — `emptyValue`, `nanValue`, `positiveInf`, `negativeInf` matching Spark CSV behavior
 - **Configurable formatting** — Custom date/timestamp formats, timezone, null values, trim/whitespace control, comment lines
 - **Flexible field definition** — `field_lengths` (start:end), `field_simple` (widths), or schema metadata
-- **Parallel processing** — Byte-based partitioning with `maxPartitionBytes` and `numPartitions`
+- **Native FileScan machinery** — Built on the same Spark internals as the built-in CSV source (since 0.2.0)
+- **Multi-file loads** — Explicit file lists (`.load(f1, f2, ...)`), glob patterns, directories, `pathGlobFilter`, `recursiveFileLookup`
+- **Per-row file provenance** — `input_file_name()` and `_metadata.file_path` name the source file of every row
+- **Parallel processing** — Native cross-file bin-packing (many small files → few partitions) plus `maxPartitionBytes` and `numPartitions` overrides
+- **Partition-directory inference** — Hive-style `key=value/` directories become partition columns
 - **Compression support** — Transparent gzip and bzip2 decompression
-- **Glob patterns** — Read multiple files with path wildcards
 - **Writer options** — Configurable padding character, field alignment (left/right), line endings
 - **Databricks compatible** — Tested against Spark 4.0.2 with Hadoop 3 bindings
 
@@ -51,6 +54,35 @@ df = spark.read.format("fixedwidth-custom-scala") \
 
 df.show(truncate=False)
 ```
+
+### Multi-File Loads (since 0.2.0)
+
+Multi-file reads behave exactly like the CSV source — per-file semantics for
+error handling, with full row-level provenance:
+
+```python
+from pyspark.sql.functions import input_file_name, col
+
+# Explicit file list — same options/schema as a single-file read
+df = spark.read.format("fixedwidth-custom-scala") \
+    .options(**file_options).schema(read_schema) \
+    .load([file1, file2, file3])
+
+# Glob, directory, or filtered directory reads
+df = spark.read.format("fixedwidth-custom-scala") \
+    .options(**file_options).schema(read_schema) \
+    .option("pathGlobFilter", "*.txt") \
+    .option("recursiveFileLookup", "true") \
+    .load("/path/to/deliveries/")
+
+# Which file did each row come from?
+df.select("*", input_file_name().alias("source_file"))
+df.select("*", col("_metadata.file_path"))
+```
+
+Small files are bin-packed across partitions automatically (no more one task
+per tiny file), and a misaligned row lands in `rescuedDataColumn` exactly as
+it would in a single-file load of that file.
 
 ### Scala Usage
 
@@ -116,7 +148,7 @@ cd sparkfixedwidthdatasource-scala
 sbt package
 
 # JAR location
-ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar
+ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar
 ```
 
 ### PySpark Local Installation
@@ -125,7 +157,7 @@ ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar
 
 ```bash
 # Start PySpark shell with the JAR
-pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar
+pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar
 
 # Now you can use the data source
 >>> df = spark.read.format("fixedwidth-custom-scala") \
@@ -138,7 +170,7 @@ pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT
 ```bash
 # Run a PySpark script with the JAR
 spark-submit \
-    --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar \
+    --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar \
     your_script.py
 ```
 
@@ -150,7 +182,7 @@ from pyspark.sql import SparkSession
 # Create Spark session with JAR
 spark = SparkSession.builder \
     .appName("FixedWidthReader") \
-    .config("spark.jars", "/path/to/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar") \
+    .config("spark.jars", "/path/to/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar") \
     .getOrCreate()
 
 # Use the data source
@@ -163,7 +195,7 @@ df = spark.read.format("fixedwidth-custom-scala") \
 
 ```bash
 # Set before starting Jupyter or Python
-export PYSPARK_SUBMIT_ARGS="--jars /path/to/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar pyspark-shell"
+export PYSPARK_SUBMIT_ARGS="--jars /path/to/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar pyspark-shell"
 
 # Then start Jupyter
 jupyter lab
@@ -209,8 +241,8 @@ If you get `Failed to find data source: fixedwidth-custom-scala`, the JAR is not
 | `trimValues` | No | `true` | Trim leading and trailing whitespace from all fields |
 | `ignoreLeadingWhiteSpace` | No | `true` | Trim only leading whitespace |
 | `ignoreTrailingWhiteSpace` | No | `true` | Trim only trailing whitespace |
-| `nullValue` | No | — | String value to interpret as SQL NULL (e.g., `""`, `"NULL"`, `"N/A"`) |
-| `emptyValue` | No | `""` | Value to substitute for empty StringType fields (after trim) |
+| `nullValue` | No | `""` | String value to interpret as SQL NULL. Default empty string: empty fields become NULL (CSV parity) |
+| `emptyValue` | No | — | Value to substitute for empty StringType fields (after trim). Only takes effect if `nullValue` is set to something other than `""` (nullValue has precedence) |
 | `nanValue` | No | `NaN` | String parsed as Float/Double NaN |
 | `positiveInf` | No | `Inf` | String parsed as positive infinity |
 | `negativeInf` | No | `-Inf` | String parsed as negative infinity |
@@ -218,8 +250,10 @@ If you get `Failed to find data source: fixedwidth-custom-scala`, the JAR is not
 | `timestampFormat` | No | `yyyy-MM-dd'T'HH:mm:ss` | Java DateTimeFormatter pattern for `TimestampType` columns |
 | `timeZone` | No | `UTC` | Timezone for date/timestamp parsing |
 | `comment` | No | — | Character marking comment lines to skip (e.g., `"#"`) |
-| `maxPartitionBytes` | No | `134217728` | Maximum bytes per partition (128 MB default) |
-| `numPartitions` | No | Auto | Override: exact number of partitions |
+| `maxPartitionBytes` | No | `134217728` | Maximum bytes per partition (128 MB). When unset, native Spark planning applies (session confs + cross-file bin-packing) |
+| `numPartitions` | No | Auto | Single file: exact partition count. Multiple files: global target (`ceil(totalBytes/n)` split size). Compressed files are never split |
+| `pathGlobFilter` | No | — | Glob pattern to filter file names when reading a directory (e.g., `"*.txt"`) |
+| `recursiveFileLookup` | No | `false` | Read files in nested subdirectories (disables partition-directory inference) |
 
 \* One of `field_lengths`, `field_simple`, or schema metadata widths is required.
 
@@ -352,24 +386,29 @@ sparkfixedwidthdatasource-scala/
 │   ├── main/
 │   │   ├── scala/com/alexandertimmer/fixedwidth/
 │   │   │   ├── DefaultSource.scala           # ServiceLoader entry point
-│   │   │   ├── FixedWidthDataSource.scala    # TableProvider + DataSourceRegister
-│   │   │   ├── FixedWidthTable.scala         # Table implementation (read + write)
-│   │   │   ├── FixedWidthScan.scala          # Scan builder + Batch
-│   │   │   ├── FixedWidthPartition.scala     # Input partition
-│   │   │   ├── FixedWidthPartitionReader.scala  # Core reader logic
+│   │   │   ├── FixedWidthPartitionReader.scala  # Core reader logic (parsing, type casting)
 │   │   │   ├── FixedWidthDataWriter.scala    # Core writer logic
 │   │   │   ├── FixedWidthBatchWrite.scala    # Batch write coordinator
 │   │   │   ├── FixedWidthWriteBuilder.scala  # Write builder
 │   │   │   ├── FixedWidthConstants.scala     # Centralized constants and option keys
 │   │   │   └── FWUtils.scala                 # Schema inference, type casting
+│   │   ├── scala/org/apache/spark/sql/execution/datasources/v2/fixedwidth/
+│   │   │   │                                 # internal Spark package (private[sql] FileScan access)
+│   │   │   ├── FixedWidthDataSourceV2.scala  # TableProvider + DataSourceRegister, path/paths resolution
+│   │   │   ├── FixedWidthFileTable.scala     # FileTable + SupportsMetadataColumns (_metadata)
+│   │   │   ├── FixedWidthFileScanBuilder.scala  # FileScanBuilder (no data-column pruning)
+│   │   │   ├── FixedWidthFileScan.scala      # TextBasedFileScan + partition-planning override
+│   │   │   ├── FixedWidthFilePartitionReaderFactory.scala  # PartitionedFile → reader bridge
+│   │   │   └── FixedWidthFileFormat.scala    # Throwing V1 fallback shim
 │   │   └── resources/
 │   │       └── META-INF/services/
 │   │           └── org.apache.spark.sql.sources.DataSourceRegister
 │   └── test/
 │       └── scala/com/alexandertimmer/fixedwidth/
-│           ├── FixedWidthRelationSpec.scala              # Core read/write tests (54 tests)
+│           ├── FixedWidthRelationSpec.scala              # Core read/write tests (59 tests)
 │           ├── FixedWidthDataSourceRegressionSpec.scala  # Regression tests (13 tests)
-│           └── MissingFunctionalitySpec.scala            # Writer + CSV options tests (37 tests)
+│           ├── MissingFunctionalitySpec.scala            # Writer + CSV options tests (38 tests)
+│           └── FileScanMigrationSpec.scala               # FileScan migration + multi-file tests (26 tests)
 ├── data/test_data/                           # Sample fixed-width files
 ├── docs/                                     # Documentation
 ├── notebook/                                 # Jupyter notebooks for testing
@@ -382,11 +421,13 @@ sparkfixedwidthdatasource-scala/
 
 | File | Purpose |
 |------|---------|
-| `DefaultSource.scala` | ServiceLoader entry point, extends `TableProvider` |
-| `FixedWidthDataSource.scala` | Main DataSource V2 implementation with `shortName()` registration |
-| `FixedWidthTable.scala` | Table implementation that creates scan and write builders |
-| `FixedWidthScan.scala` | Scan builder that plans input partitions |
-| `FixedWidthPartition.scala` | Input partition representing a file to process |
+| `DefaultSource.scala` | ServiceLoader entry point, extends `FixedWidthDataSourceV2` |
+| `FixedWidthDataSourceV2.scala` | DataSource V2 provider: `shortName()` registration, `path`/`paths` list resolution. Implements `TableProvider` directly (not `FileDataSourceV2`) so writes stay on the V2 path (SPARK-28396) |
+| `FixedWidthFileTable.scala` | `FileTable`-based table: file discovery via `PartitioningAwareFileIndex`, `_metadata` column, write-safe schema resolution |
+| `FixedWidthFileScanBuilder.scala` | Scan builder; keeps all data columns (positional parsing), honors partition-column pruning and `_metadata` |
+| `FixedWidthFileScan.scala` | `TextBasedFileScan`: native bin-packing plus `numPartitions`/`maxPartitionBytes` overrides, driver-side option resolution |
+| `FixedWidthFilePartitionReaderFactory.scala` | Bridges Spark's `PartitionedFile` splits to the reader; appends partition values and `_metadata` |
+| `FixedWidthFileFormat.scala` | Minimal V1 fallback shim that throws (loud failure instead of silently wrong data) |
 | `FixedWidthPartitionReader.scala` | Core reader logic: parses rows, handles type conversion, populates special columns |
 | `FixedWidthDataWriter.scala` | Core writer logic: formats values, pads fields, handles alignment and line endings |
 | `FixedWidthBatchWrite.scala` | Batch write coordinator |
@@ -426,7 +467,7 @@ sbt test
 
 After building, the JAR is located at:
 ```
-target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar
+target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar
 ```
 
 ### Interactive Testing with Jupyter
@@ -467,9 +508,10 @@ target/scala-2.13/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar
 The test suite validates all CSV PERMISSIVE mode behaviors, reader options, writer features, and roundtrip correctness:
 
 ```
-Tests: succeeded 104, failed 0 (across 3 test classes)
+Tests: succeeded 135, failed 0 (across 4 test classes; 1 test self-cancels
+without a local bz2 fixture)
 
-FixedWidthRelationSpec (54 tests):
+FixedWidthRelationSpec (59 tests):
 - Core CSV PERMISSIVE mode scenarios (6 scenarios)
 - Type conversion: String, Int, Long, Float, Double, Boolean
 - Whitespace: trimValues, ignoreLeadingWhiteSpace, ignoreTrailingWhiteSpace
@@ -478,12 +520,12 @@ FixedWidthRelationSpec (54 tests):
 - Multi-file reading, glob patterns, compression (gzip, bzip2)
 - Partitioning: numPartitions, maxPartitionBytes
 - Write support, schema metadata propagation
-- Header/skip_lines, encoding
+- Header/skip_lines, encoding, short-line handling
 
 FixedWidthDataSourceRegressionSpec (13 tests):
 - Regression tests for core read/write roundtrips
 
-MissingFunctionalitySpec (37 tests):
+MissingFunctionalitySpec (38 tests):
 - Writer: paddingChar, alignment (left/right), lineEnding
 - Writer: DecimalType formatting, DateType/TimestampType roundtrip
 - Write-side trim: ignoreLeadingWhiteSpace, ignoreTrailingWhiteSpace
@@ -491,6 +533,15 @@ MissingFunctionalitySpec (37 tests):
 - nanValue/positiveInf/negativeInf: read parsing, write formatting, roundtrip
 - Rescued data: _file_path config (default, enabled, disabled, mid-session change)
 - Constants consolidation validation
+
+FileScanMigrationSpec (26 tests):
+- Characterization safety net (pre-migration behavior pinned)
+- Explicit multi-path loads (.load(f1, f2)), paths option
+- input_file_name() and _metadata.file_path provenance
+- Cross-file bin-packing, numPartitions global target on multi-file loads
+- pathGlobFilter, recursiveFileLookup, Hive-style partition-dir inference
+- Multi-file error semantics ≡ per-file single loads (incl. misaligned files)
+- V1 fallback shim, missing-path error behavior
 ```
 
 ## Troubleshooting
@@ -521,7 +572,7 @@ To use this library on Databricks:
 
 2. **Upload to Databricks**
    - Workspace → Create → Library → Upload JAR
-   - Or use DBFS: `dbfs:/FileStore/jars/spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar`
+   - Or use DBFS: `dbfs:/FileStore/jars/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar`
 
 3. **Attach to Cluster**
    - Cluster → Libraries → Install New → Choose uploaded JAR
@@ -546,48 +597,55 @@ To use this library on Databricks:
 
 ## Architecture
 
+Since 0.2.0 the read path is built on Spark's native FileScan machinery
+(`FileTable` / `TextBasedFileScan` / `FilePartitionReaderFactory`) — the same
+foundation as the built-in CSV source. See `docs/ARCHITECTURE.md` for details.
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Spark Application                       │
-├─────────────────────────────────────────────────────────────┤
-│  spark.read.format("fixedwidth-custom-scala")               │
-│           │                                                 │
-│           ▼                                                 │
-│  ┌─────────────────────┐    ServiceLoader discovers         │
-│  │   DefaultSource     │◄── via META-INF/services           │
-│  │   (TableProvider)   │                                    │
-│  └──────────┬──────────┘                                    │
-│             │ getTable()                                    │
-│             ▼                                               │
-│  ┌─────────────────────┐                                    │
-│  │  FixedWidthTable    │    Defines scan and write          │
-│  │ (Read + Write)      │    capabilities                    │
-│  └──────┬────────┬─────┘                                    │
-│         │        │                                          │
-│    READ │        │ WRITE                                    │
-│         ▼        ▼                                          │
-│  ┌──────────┐ ┌───────────────┐                             │
-│  │  Scan    │ │ WriteBuilder  │                             │
-│  │  +Batch  │ │ +BatchWrite   │                             │
-│  └────┬─────┘ └──────┬────────┘                             │
-│       │              │                                      │
-│       ▼              ▼                                      │
-│  ┌──────────┐ ┌───────────────┐                             │
-│  │ Partition │ │  DataWriter   │  Formats values, pads      │
-│  │  Reader   │ │  (per task)   │  fields, writes lines      │
-│  └────┬─────┘ └───────────────┘                             │
-│       │                                                     │
-│       ▼                                                     │
-│  ┌─────────────────────┐                                    │
-│  │      FWUtils        │    Schema inference, type casting, │
-│  │  (Utility Object)   │    special column handling         │
-│  └─────────────────────┘                                    │
-│                                                             │
-│  ┌─────────────────────┐                                    │
-│  │ FixedWidthConstants │    Centralized option keys,        │
-│  │  (Constants)        │    defaults, error messages        │
-│  └─────────────────────┘                                    │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│                       Spark Application                        │
+├────────────────────────────────────────────────────────────────┤
+│  spark.read.format("fixedwidth-custom-scala")                  │
+│           │                                                    │
+│           ▼                                                    │
+│  ┌───────────────────────┐   ServiceLoader discovers           │
+│  │ DefaultSource extends │◄── via META-INF/services            │
+│  │ FixedWidthDataSourceV2│   resolves path + paths list        │
+│  └──────────┬────────────┘                                     │
+│             │ getTable()                                       │
+│             ▼                                                  │
+│  ┌────────────────────────┐  FileIndex: globs, dirs, filters,  │
+│  │  FixedWidthFileTable   │  partition-dir inference;          │
+│  │ (FileTable, _metadata) │  scan and write capabilities       │
+│  └──────┬──────────┬──────┘                                    │
+│         │          │                                           │
+│    READ │          │ WRITE (unchanged path)                    │
+│         ▼          ▼                                           │
+│  ┌─────────────┐ ┌───────────────┐                             │
+│  │FixedWidth-  │ │ WriteBuilder  │                             │
+│  │FileScan     │ │ +BatchWrite   │                             │
+│  │(bin-packing,│ └──────┬────────┘                             │
+│  │ overrides)  │        │                                      │
+│  └────┬────────┘        ▼                                      │
+│       │          ┌───────────────┐                             │
+│       ▼          │  DataWriter   │  Formats values, pads       │
+│  ┌─────────────┐ │  (per task)   │  fields, writes lines       │
+│  │ Partition-  │ └───────────────┘                             │
+│  │ Reader (per │                                               │
+│  │ file split) │                                               │
+│  └────┬────────┘                                               │
+│       │                                                        │
+│       ▼                                                        │
+│  ┌─────────────────────┐                                       │
+│  │      FWUtils        │    Schema inference, type casting,    │
+│  │  (Utility Object)   │    special column handling            │
+│  └─────────────────────┘                                       │
+│                                                                │
+│  ┌─────────────────────┐                                       │
+│  │ FixedWidthConstants │    Centralized option keys,           │
+│  │  (Constants)        │    defaults, error messages           │
+│  └─────────────────────┘                                       │
+└────────────────────────────────────────────────────────────────┘
 ```
 
 ## Future Ideas

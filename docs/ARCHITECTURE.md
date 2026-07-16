@@ -10,27 +10,46 @@ The **Spark Fixed-Width Data Source** is a custom Apache Spark Data Source V2 im
 
 ## High-Level Architecture
 
+Since v0.2.0 the read path is built on **Spark's native FileScan machinery**
+(the same foundation as the built-in CSV/JSON/Text sources): file discovery
+runs through a `PartitioningAwareFileIndex`, partition planning through
+`FilePartition` bin-packing, and per-file reading through
+`FilePartitionReaderFactory`. This provides explicit multi-path loads
+(`.load(f1, f2, ...)`), cross-file bin-packing for many small files,
+`input_file_name()` / `_metadata` provenance, `pathGlobFilter`,
+`recursiveFileLookup` and Hive-style partition-directory inference — while the
+battle-tested per-line parsing core (`FixedWidthPartitionReader`, `FWUtils`)
+and the entire write path are unchanged.
+
+The FileScan-derived classes live in the
+`org.apache.spark.sql.execution.datasources.v2.fixedwidth` package because
+they extend `private[sql]` Spark internals — the same technique the built-in
+sources use. The parsing/writing core remains in
+`com.alexandertimmer.fixedwidth`.
+
 ```mermaid
 flowchart TB
     subgraph SparkApp["Spark Application"]
         Client["spark.read.format('fixedwidth-custom-scala')"]
     end
 
-    subgraph DSV2["DataSource V2 API Layer"]
-        DS["DefaultSource<br/>(TableProvider)"]
-        Table["FixedWidthTable<br/>(SupportsRead, SupportsWrite)"]
-        Scan["FixedWidthScan<br/>(Scan + Batch)"]
+    subgraph DSV2["DataSource V2 API Layer (internal pkg: ...datasources.v2.fixedwidth)"]
+        DS["DefaultSource →<br/>FixedWidthDataSourceV2<br/>(TableProvider)"]
+        Table["FixedWidthFileTable<br/>(FileTable + SupportsMetadataColumns)"]
+        Builder["FixedWidthFileScanBuilder<br/>(FileScanBuilder)"]
+        Scan["FixedWidthFileScan<br/>(TextBasedFileScan)"]
+        Shim["FixedWidthFileFormat<br/>(throwing V1 fallback shim)"]
     end
 
     subgraph Execution["Execution Layer"]
-        Factory["FixedWidthPartitionReaderFactory"]
-        Partition["FixedWidthPartition<br/>(InputPartition)"]
-        Reader["FixedWidthPartitionReader<br/>(PartitionReader)"]
+        Factory["FixedWidthFilePartitionReaderFactory<br/>(FilePartitionReaderFactory)"]
+        Partition["FilePartition / PartitionedFile<br/>(Spark native)"]
+        Reader["FixedWidthPartitionReader<br/>(PartitionReader — unchanged parsing core)"]
     end
 
     subgraph Utils["Utilities"]
         FWUtils["FWUtils<br/>(Schema, Casting, Parsing)"]
-        Write["FixedWidthWriteBuilder<br/>(Optional Write Support)"]
+        Write["FixedWidthWriteBuilder<br/>(unchanged write path)"]
     end
 
     subgraph Storage["Storage Layer"]
@@ -40,10 +59,12 @@ flowchart TB
 
     Client --> DS
     DS -->|"getTable()"| Table
-    Table -->|"newScanBuilder()"| Scan
-    Scan -->|"planInputPartitions()"| Partition
+    Table -.->|"fallbackFileFormat"| Shim
+    Table -->|"newScanBuilder()"| Builder
+    Builder -->|"build()"| Scan
+    Scan -->|"planInputPartitions()<br/>(native bin-packing + option override)"| Partition
     Scan -->|"createReaderFactory()"| Factory
-    Factory -->|"createReader()"| Reader
+    Factory -->|"buildReader(PartitionedFile)"| Reader
     Reader -->|"next(), get()"| FWUtils
     Reader --> FS
     FS --> Files
@@ -54,7 +75,7 @@ flowchart TB
     classDef util fill:#f3e5f5,stroke:#7b1fa2
     classDef storage fill:#e8f5e9,stroke:#2e7d32
 
-    class DS,Table,Scan api
+    class DS,Table,Builder,Scan,Shim api
     class Factory,Partition,Reader exec
     class FWUtils,Write util
     class FS,Files storage
@@ -72,14 +93,12 @@ flowchart TB
 |----------|-------|
 | **Technology** | Scala 2.13, Spark DataSource V2 API |
 | **Responsibilities** | ServiceLoader entry point, provider registration |
-| **Key Dependencies** | `FixedWidthDataSource`, Java ServiceLoader |
+| **Key Dependencies** | `FixedWidthDataSourceV2`, Java ServiceLoader |
 | **Design Pattern** | Facade Pattern |
 
 ```scala
 // Registered via META-INF/services/org.apache.spark.sql.sources.DataSourceRegister
-class DefaultSource extends TableProvider with DataSourceRegister {
-  override def shortName(): String = "fixedwidth-custom-scala"
-}
+class DefaultSource extends FixedWidthDataSourceV2
 ```
 
 **ServiceLoader Discovery Flow:**
@@ -91,13 +110,13 @@ META-INF/services/org.apache.spark.sql.sources.DataSourceRegister
 
 ---
 
-#### FixedWidthDataSource.scala
+#### FixedWidthDataSourceV2.scala (internal package)
 
 | Property | Value |
 |----------|-------|
 | **Technology** | Spark DataSource V2 `TableProvider` API |
-| **Responsibilities** | Schema inference, table creation, external metadata support |
-| **Key Dependencies** | `FWUtils`, `FixedWidthTable` |
+| **Responsibilities** | Path-list resolution (`path` + JSON `paths`), table creation, external metadata support |
+| **Key Dependencies** | `FWUtils`, `FixedWidthFileTable` |
 | **Design Pattern** | Factory Pattern |
 
 **Key Methods:**
@@ -106,36 +125,58 @@ META-INF/services/org.apache.spark.sql.sources.DataSourceRegister
 |--------|---------|
 | `shortName()` | Returns `"fixedwidth-custom-scala"` for format registration |
 | `supportsExternalMetadata()` | Returns `true` to accept user-provided schemas |
-| `inferSchema(options)` | Infers base schema from `field_lengths` count |
-| `getTable(schema, partitions, properties)` | Creates `FixedWidthTable` with resolved schema |
+| `getPaths(options)` | Decodes the JSON `paths` option (from `.load(f1, f2, ...)`) plus the singular `path` — mirroring `FileDataSourceV2` |
+| `inferSchema(options)` | Base schema from `field_lengths`/`field_simple` + special columns |
+| `getTable(schema, partitions, properties)` | Creates `FixedWidthFileTable` with resolved schema |
 
-**Schema Resolution Strategy:**
+> **Design note (SPARK-28396):** the provider implements `TableProvider`
+> directly and deliberately does NOT extend Spark's `FileDataSourceV2`
+> interface: `DataFrameWriter` unconditionally routes `FileDataSourceV2`
+> sources to the V1 write path (`fallbackFileFormat`), which would bypass
+> this source's existing V2 write path. Implementing `TableProvider` keeps
+> `df.write.save(...)` on the unchanged `FixedWidthWriteBuilder`.
+
+**Schema Resolution Strategy (unchanged contract):**
 ```
 User provides schema? ──┬── YES ──► Use user schema
                         │
-                        └── NO ───► Call inferSchema()
+                        └── NO ───► Infer from field_lengths / field_simple
                                          │
                                          ▼
                         appendSpecialColumns() applied to BOTH paths
+                        (_corrupt_record: only if already present;
+                         rescuedDataColumn: auto-appended when option set)
                                          │
                                          ▼
-                               Create FixedWidthTable(resolvedSchema)
+                             Create FixedWidthFileTable(resolvedSchema)
 ```
 
 ---
 
 ### 2. Table Layer
 
-#### FixedWidthTable.scala
+#### FixedWidthFileTable.scala (internal package)
 
 | Property | Value |
 |----------|-------|
-| **Technology** | Spark `Table` with `SupportsRead` and `SupportsWrite` |
-| **Responsibilities** | Define table capabilities, create scan/write builders |
-| **Key Dependencies** | `FixedWidthScanBuilder`, `FixedWidthWriteBuilder` |
+| **Technology** | Spark `FileTable` (native file-source machinery) + `SupportsMetadataColumns` |
+| **Responsibilities** | File discovery via `PartitioningAwareFileIndex`, schema composition, `_metadata` declaration, scan/write builder creation |
+| **Key Dependencies** | `FixedWidthFileScanBuilder`, `FixedWidthWriteBuilder`, `FixedWidthFileFormat` |
 | **Design Pattern** | Builder Pattern |
 
-**Capabilities:**
+`FileTable` supplies globbing, directory expansion, hidden-file filtering
+(`_`/`.` prefixes), `pathGlobFilter`, `recursiveFileLookup` and Hive-style
+partition-directory inference. Two deliberate specializations:
+
+- **Write-safe schema resolution**: `FileTable`'s file index requires paths to
+  exist; because this source also serves `df.write.save(newPath)` through the
+  V2 path, schema resolution falls back to the options/user schema when the
+  location does not exist yet (reads of missing paths still fail loudly).
+- **`_metadata` column**: declared via `SupportsMetadataColumns` with the same
+  struct shape as Spark's file sources (`file_path`, `file_name`, `file_size`,
+  `file_block_start`, `file_block_length`, `file_modification_time`).
+
+**Capabilities (unchanged):**
 ```scala
 Set(
   TableCapability.BATCH_READ,      // Read in batches
@@ -147,75 +188,64 @@ Set(
 )
 ```
 
+**V1 fallback shim:** `FileTable` requires a V1 `FileFormat` class.
+`FixedWidthFileFormat` throws `UnsupportedOperationException` on any read or
+write — if a V1-only code path (e.g. SQL `INSERT INTO`) is ever taken, the
+failure is loud and attributable instead of silently wrong data.
+
 ---
 
 ### 3. Scan Layer
 
-#### FixedWidthScan.scala
+#### FixedWidthFileScanBuilder.scala / FixedWidthFileScan.scala (internal package)
 
 | Property | Value |
 |----------|-------|
-| **Technology** | Spark `Scan` + `Batch` interfaces |
-| **Responsibilities** | Partition planning, reader factory creation, glob expansion |
-| **Key Dependencies** | `FixedWidthPartition`, `FixedWidthPartitionReaderFactory`, Hadoop FileSystem |
+| **Technology** | Spark `FileScanBuilder` + `TextBasedFileScan` |
+| **Responsibilities** | Partition planning (native bin-packing + option override), driver-side option resolution, reader factory creation |
+| **Key Dependencies** | `FixedWidthFilePartitionReaderFactory`, `FilePartition`, `PartitionedFileUtil` |
 | **Design Pattern** | Strategy Pattern |
 
-**Partition Planning Algorithm:**
+The scan builder **does not prune data columns** — fixed-width parsing is
+positional over the whole line, so the resolved schema's field order must map
+1:1 onto the configured field positions (Spark projects required columns above
+the scan). Partition-column pruning and the `_metadata` request are honored.
 
-```mermaid
-flowchart TD
-    A[Path Pattern] --> B{Expand Glob}
-    B --> C[Get File Statuses]
-    C --> D{For Each File}
-    D --> E{Compressed?}
-    E -->|Yes| F[Single Partition<br/>Entire File]
-    E -->|No| G{Check Options}
-    G --> H{numPartitions set?}
-    H -->|Yes| I[Use Specified Count]
-    H -->|No| J[Calculate from maxPartitionBytes]
-    I --> K[Create N Partitions]
-    J --> K
-    K --> L[Byte-Range Partitions]
-    F --> M[All Partitions]
-    L --> M
-```
+**Partition Planning:**
+
+| Scenario | Behavior |
+|----------|----------|
+| No options set | Native planning: session confs (`spark.sql.files.maxPartitionBytes`, `openCostInBytes`) + cross-file bin-packing via `FilePartition.getFilePartitions` |
+| `maxPartitionBytes` option | Takes precedence over the session-conf-derived split size |
+| `numPartitions` + single splittable file | Exact partition count (pre-migration semantics) |
+| `numPartitions` + multiple files | Global target: split size `ceil(totalBytes / n)` fed into native bin-packing |
+| Compressed file | Never split (single `PartitionedFile`), regardless of options |
+| Hive-partitioned directory layout | Native planning (datasource planning options don't apply) |
 
 **Key Options:**
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `maxPartitionBytes` | 128MB | Maximum bytes per partition |
-| `numPartitions` | Auto | Override: exact partition count |
+| `numPartitions` | Auto | Single file: exact count. Multiple files: global target |
 
 ---
 
 ### 4. Partition Layer
 
-#### FixedWidthPartition.scala
+Partitions are Spark-native since v0.2.0: each `InputPartition` is a
+`FilePartition` holding one or more `PartitionedFile` splits
+(path, byte offset, length, partition values). Cross-file bin-packing packs
+many small files into few partitions using the session's
+`spark.sql.files.openCostInBytes`; large files are split at
+`maxSplitBytes` boundaries.
 
-| Property | Value |
-|----------|-------|
-| **Technology** | Spark `InputPartition` |
-| **Responsibilities** | Represent byte range in a file |
-| **Key Dependencies** | None (data class) |
-| **Design Pattern** | Value Object |
-
-```scala
-case class FixedWidthPartition(
-  path: String,        // File path (HDFS, S3, local)
-  start: Long,         // Byte offset start (inclusive)
-  length: Long,        // Byte length of partition
-  isFirstSplit: Boolean // True if this is first partition (no line skip)
-) extends InputPartition
 ```
+Files:  [══ A ══════════════════][═ B ═][═ C ═][══ D ══════]
+Packed: │ Partition 1: A(0-128M) │ Partition 2: A(128M-end), B, C │ Partition 3: D │
 
-**Byte-Based Partitioning:**
-```
-File: [═══════════════════════════════════════════════════]
-      │ Partition 1  │ Partition 2  │ Partition 3  │ P4  │
-      └─ 0-128MB ────┴─ 128-256MB ──┴─ 256-384MB ──┴─ ... ┘
-
-Partition N (non-first): Seeks to byte offset, skips partial line, reads to byte limit + complete line
+Split N (start > 0): reader seeks to byte offset, skips the partial line,
+reads to byte limit + completes the last line (unchanged boundary logic).
 ```
 
 ---
@@ -266,42 +296,28 @@ flowchart LR
 
 ---
 
-#### FixedWidthPartitionReaderFactory.scala
+#### FixedWidthFilePartitionReaderFactory.scala (internal package)
 
 | Property | Value |
 |----------|-------|
-| **Technology** | Spark `PartitionReaderFactory` (Serializable) |
-| **Responsibilities** | Create partition readers with configuration |
+| **Technology** | Spark `FilePartitionReaderFactory` (Serializable) |
+| **Responsibilities** | Bridge Spark's `PartitionedFile` splits to `FixedWidthPartitionReader`; append partition values and the `_metadata` struct |
 | **Key Dependencies** | `FixedWidthPartitionReader` |
 | **Design Pattern** | Factory Pattern |
 
-**Serializable Configuration:**
-```scala
-case class FixedWidthPartitionReaderFactory(
-  schema: StructType,
-  fieldLengths: String,
-  mode: String,
-  skipLines: Int,
-  encoding: String,
-  rescuedDataColumn: Option[String],
-  columnNameOfCorruptRecord: Option[String],
-  ignoreLeadingWhiteSpace: Boolean,
-  ignoreTrailingWhiteSpace: Boolean,
-  nullValue: Option[String],
-  dateFormat: Option[String],
-  timestampFormat: Option[String],
-  timeZone: Option[String],
-  comment: Option[Char],
-  hadoopConf: SerializableConfiguration,       // Serialized Hadoop config (resolved on Driver)
-  includeFilePathInRescuedData: Boolean,        // From Spark SQL config
-  emptyValue: Option[String],                   // CSV-compatible empty value substitution
-  nanValue: String,                             // NaN string for Float/Double (default: "NaN")
-  positiveInf: String,                          // Positive infinity string (default: "Inf")
-  negativeInf: String                           // Negative infinity string (default: "-Inf")
-) extends PartitionReaderFactory with Serializable
-```
+`buildReader(file: PartitionedFile)` maps path/start/length directly onto the
+reader's existing constructor (`isFirstSplit = file.start == 0` — the same
+first-split semantics as before). Reading through the native
+`FilePartitionReader` wrapper also populates Spark's input-file metadata,
+which is what makes `input_file_name()` return real values. When requested,
+Hive-style partition values and the `_metadata` struct are appended via
+`PartitionReaderWithPartitionValues`.
 
-> **Note:** `hadoopConf` and `includeFilePathInRescuedData` are resolved on the Driver in `createReaderFactory()` and serialized to executors via `SerializableConfiguration`, avoiding the anti-pattern of calling `SparkSession.active` on executors.
+All parsing configuration (field positions, mode, encoding, trim, nullValue,
+date/timestamp formats, NaN/Inf strings, rescued/corrupt column names) is
+resolved on the Driver in `createReaderFactory()` and serialized to executors
+(`SerializableConfiguration` for the Hadoop conf), avoiding the anti-pattern
+of calling `SparkSession.active` on executors.
 
 ---
 
@@ -352,23 +368,25 @@ case class FixedWidthPartitionReaderFactory(
 sequenceDiagram
     participant App as Spark Application
     participant DS as DefaultSource
-    participant Table as FixedWidthTable
-    participant Scan as FixedWidthScan
+    participant Table as FixedWidthFileTable
+    participant Scan as FixedWidthFileScan
     participant Hadoop as Hadoop FileSystem
     participant Reader as PartitionReader
     participant Utils as FWUtils
 
     App->>DS: spark.read.format("fixedwidth-custom-scala")
+    DS->>DS: getPaths() — path + JSON paths list
     DS->>DS: inferSchema() or use provided schema
     DS->>Utils: appendSpecialColumns()
     DS->>Table: getTable(resolvedSchema)
-    Table->>Scan: newScanBuilder()
+    Table->>Table: PartitioningAwareFileIndex<br/>(globs, dirs, pathGlobFilter,<br/>recursiveFileLookup, partition dirs)
+    Table->>Scan: newScanBuilder().build()
 
     Note over Scan: Partition Planning
-    Scan->>Hadoop: globStatus(path)
-    Hadoop-->>Scan: FileStatus[]
-    Scan->>Scan: Calculate byte ranges
-    Scan-->>App: InputPartition[]
+    Scan->>Hadoop: fileIndex.listFiles()
+    Hadoop-->>Scan: PartitionedFile splits
+    Scan->>Scan: Bin-pack splits (native) or apply<br/>numPartitions / maxPartitionBytes override
+    Scan-->>App: FilePartition[]
 
     Note over Reader: Parallel Execution
     App->>Reader: createReader(partition)
@@ -390,7 +408,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant App as Spark Application
-    participant Table as FixedWidthTable
+    participant Table as FixedWidthFileTable
     participant Writer as FixedWidthWriteBuilder
     participant Committer as DataWritingSparkTask
     participant DataWriter as FixedWidthDataWriter
@@ -436,7 +454,7 @@ sequenceDiagram
 flowchart TB
     subgraph Build["Build Environment"]
         SBT["sbt package"]
-        JAR["spark-fixedwidth-datasource_2.13-0.1.0-SNAPSHOT.jar"]
+        JAR["spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar"]
     end
 
     subgraph Deploy["Deployment Options"]
@@ -493,7 +511,7 @@ spark-fixedwidth-datasource_2.13
 |------------|----------|------------|
 | Option parsing | `FWUtils.parsePositions()` | Malformed `field_lengths` rejected |
 | Schema validation | `getTable()` | Invalid schemas rejected |
-| File path validation | `FixedWidthScan` | Glob expansion via Hadoop API |
+| File path validation | `PartitioningAwareFileIndex` | Native Spark path resolution and globbing |
 | Type conversion | `FWUtils.cast()` | Safe parsing with NULL fallback |
 
 ### Audit & Compliance
@@ -607,12 +625,12 @@ flowchart TD
 
     subgraph Core["Core Components"]
         DS["DefaultSource"]
-        DSImpl["FixedWidthDataSource"]
-        Table["FixedWidthTable"]
-        Scan["FixedWidthScan"]
-        Part["FixedWidthPartition"]
-        Factory["PartitionReaderFactory"]
-        Reader["PartitionReader"]
+        DSImpl["FixedWidthDataSourceV2"]
+        Table["FixedWidthFileTable"]
+        Scan["FixedWidthFileScanBuilder / FixedWidthFileScan"]
+        Part["FilePartition / PartitionedFile (Spark native)"]
+        Factory["FixedWidthFilePartitionReaderFactory"]
+        Reader["FixedWidthPartitionReader"]
         Utils["FWUtils"]
     end
 

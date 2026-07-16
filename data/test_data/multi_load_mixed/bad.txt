@@ -1,0 +1,2 @@
+BadA ABCDE
+BadB 00006

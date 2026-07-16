@@ -6,92 +6,9 @@ import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.connector.read._
 import org.apache.spark.sql.types.{StructType, StructField}
 import org.apache.spark.unsafe.types.UTF8String
-import org.apache.spark.util.SerializableConfiguration
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FSDataInputStream, Path}
 import org.apache.hadoop.io.compress.CompressionCodecFactory
-
-/**
- * Factory for creating partition readers for fixed-width files.
- *
- * This factory is serialized to executors and creates readers with
- * consistent configuration across all partitions.
- *
- * @param schema resolved schema including special columns
- * @param fieldLengths field positions in "start:end,start:end,..." format
- * @param mode parse mode: PERMISSIVE, DROPMALFORMED, or FAILFAST
- * @param skipLines number of lines to skip at file start
- * @param encoding character encoding (default UTF-8)
- * @param rescuedDataColumn optional column name for rescued data JSON
- * @param columnNameOfCorruptRecord optional column name for corrupt records
- * @param ignoreLeadingWhiteSpace trim leading whitespace from fields
- * @param ignoreTrailingWhiteSpace trim trailing whitespace from fields
- * @param nullValue string representing null values
- * @param dateFormat date parsing format (Java DateTimeFormatter)
- * @param timestampFormat timestamp parsing format (Java DateTimeFormatter)
- * @param timeZone timezone for date/timestamp parsing
- * @param comment character indicating comment lines to skip
- * @since 0.1.0
- */
-case class FixedWidthPartitionReaderFactory(
-    schema: StructType,
-    fieldLengths: String,
-    mode: String,
-    skipLines: Int,
-    encoding: String,
-    rescuedDataColumn: Option[String],
-    columnNameOfCorruptRecord: Option[String],
-    ignoreLeadingWhiteSpace: Boolean = true,
-    ignoreTrailingWhiteSpace: Boolean = true,
-    nullValue: Option[String] = None,
-    dateFormat: Option[String] = None,
-    timestampFormat: Option[String] = None,
-    timeZone: Option[String] = None,
-    comment: Option[Char] = None,
-    hadoopConf: SerializableConfiguration,
-    includeFilePathInRescuedData: Boolean = true,
-    emptyValue: Option[String] = None,
-    nanValue: String = "NaN",
-    positiveInf: String = "Inf",
-    negativeInf: String = "-Inf"
-) extends PartitionReaderFactory with Serializable {
-
-  /**
-   * Creates a partition reader for the given partition.
-   *
-   * @param partition input partition containing file path and byte range
-   * @return reader for processing the partition
-   */
-  override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
-    val p = partition.asInstanceOf[FixedWidthPartition]
-    new FixedWidthPartitionReader(
-      pathStr = p.path,
-      startByte = p.start,
-      lengthBytes = p.length,
-      isFirstSplit = p.isFirstSplit,
-      schema = schema,
-      fieldLengths = fieldLengths,
-      mode = mode,
-      skipLines = skipLines,
-      encoding = encoding,
-      rescuedDataColumn = rescuedDataColumn,
-      columnNameOfCorruptRecord = columnNameOfCorruptRecord,
-      ignoreLeadingWhiteSpace = ignoreLeadingWhiteSpace,
-      ignoreTrailingWhiteSpace = ignoreTrailingWhiteSpace,
-      nullValue = nullValue,
-      dateFormat = dateFormat,
-      timestampFormat = timestampFormat,
-      timeZone = timeZone,
-      comment = comment,
-      hadoopConf = hadoopConf.value,
-      includeFilePathInRescuedData = includeFilePathInRescuedData,
-      emptyValue = emptyValue,
-      nanValue = nanValue,
-      positiveInf = positiveInf,
-      negativeInf = negativeInf
-    )
-  }
-}
 
 /**
  * Partition reader for fixed-width formatted files.

@@ -515,7 +515,12 @@ Character that marks comment lines to skip.
 | **Default**  | `134217728` (128 MB) |
 | **Type**     | Long (bytes)         |
 
-Maximum bytes per partition for splitting large files.
+Maximum bytes per partition for splitting large files. When this option is
+not set, native Spark planning applies: the session confs
+`spark.sql.files.maxPartitionBytes` and `spark.sql.files.openCostInBytes`
+drive split sizing, and splits from **multiple files are bin-packed into
+shared partitions** (many small files collapse into few partitions instead
+of one task per file). Compressed files are never split.
 
 **Recommendations:**
 
@@ -544,17 +549,49 @@ Maximum bytes per partition for splitting large files.
 | **Default**  | Auto-calculated |
 | **Type**     | Integer         |
 
-Override: exact number of partitions for single-file reads.
+Partition-count control:
+
+- **Single uncompressed file**: exact partition count.
+- **Multiple files** (since 0.2.0): interpreted as a **global target** — the
+  planner derives a split size of `ceil(totalBytes / numPartitions)` and feeds
+  it into native bin-packing. (Previously the option silently disabled
+  splitting for multi-file reads.)
+- **Compressed files**: never split; the option is ignored.
 
 ```python
-# Force exactly 8 partitions
+# Force exactly 8 partitions (single file)
 .option("numPartitions", "8")
 
-# Force exactly 16 partitions
+# Target ~16 partitions across all matched files
 .option("numPartitions", "16")
 ```
 
-**Note:** For multi-file reads, each file gets one partition by default.
+---
+
+### Multi-File Reads & Provenance (since 0.2.0)
+
+The source is built on Spark's native FileScan machinery and supports the
+same multi-file interface as the built-in CSV source:
+
+```python
+# Explicit file list (vararg paths)
+spark.read.format("fixedwidth-custom-scala") \
+    .options(**file_options).schema(read_schema) \
+    .load(file1, file2, file3)
+
+# Native file-index options
+.option("pathGlobFilter", "*.txt")        # only matching file names
+.option("recursiveFileLookup", "true")    # descend into subdirectories
+```
+
+- Error semantics are **per file**: a multi-file load behaves exactly like a
+  single-file load of each file (`_rescued_data` / `_corrupt_record` rules
+  unchanged).
+- Per-row provenance: `input_file_name()` and the hidden `_metadata` column
+  (`_metadata.file_path`, `file_name`, `file_size`, `file_block_start`,
+  `file_block_length`, `file_modification_time`) name the source file.
+- Hive-style partition directories (`key=value/`) are inferred as partition
+  columns, matching the built-in file sources.
 
 ---
 

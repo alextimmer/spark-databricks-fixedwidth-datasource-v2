@@ -27,5 +27,7 @@ else
 fi
 
 # Launch Jupyter Notebook accessible from host
-jupyter notebook --ip 0.0.0.0 --port 8888 --no-browser --allow-root
+# Token/password auth disabled — local testing inside the devcontainer only
+jupyter notebook --ip 0.0.0.0 --port 8888 --no-browser --allow-root \
+    --IdentityProvider.token='' --ServerApp.password=''
 

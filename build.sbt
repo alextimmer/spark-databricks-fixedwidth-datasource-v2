@@ -4,7 +4,7 @@ ThisBuild / description  := "A Spark 4 DataSource V2 implementation for reading 
 ThisBuild / homepage     := Some(url("https://github.com/AlexanderTimmer/spark-fixedwidth-datasource"))
 ThisBuild / licenses     += "Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0.txt")
 
-version := "0.1.0-SNAPSHOT"
+version := "0.2.0-SNAPSHOT"
 
 val sparkVersion = "4.0.2"
 
