@@ -10,11 +10,14 @@
         "ms-toolsai.jupyter",
         "ms-azuretools.vscode-docker",
         "eamodio.gitlens",
-        "mhutchie.git-graph"
+        "mhutchie.git-graph",
+        "anthropic.claude-code"
       ]
     }
   },
-  "postCreateCommand": "echo 'Container ready!'",
+  "mounts": [
+    "source=claude-code-config,target=/root/.claude,type=volume"
+  ],
   "postCreateCommand": "find ./scripts -type f -exec sed -i 's/\\r$//' {} +",
   "postStartCommand": "chmod +x ./scripts/start_jupyter.sh && chmod +x ./scripts/start_spark_jupyter.sh && chmod +x ./scripts/build_and_test.sh"
 }
