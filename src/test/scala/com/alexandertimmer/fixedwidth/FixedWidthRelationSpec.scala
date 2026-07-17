@@ -1061,20 +1061,56 @@ class FixedWidthRelationSpec extends AnyFunSuite {
     assert(names.contains("FileC2"), "Should contain FileC2")
   }
 
-  test("glob pattern: creates partition per file") {
+  test("glob pattern: partition planning matches native CSV bin-packing") {
+    // Since 0.2.0 multi-file planning is Spark-native: files are bin-packed across
+    // partitions exactly like the built-in CSV source. Partition counts under
+    // default confs depend on the machine (cores, openCostInBytes), so this test
+    // asserts (1) parity with CSV on whatever this machine produces and
+    // (2) an exact, machine-independent count under pinned confs.
     val schema = StructType(Seq(
       StructField("name", StringType),
       StructField("id", IntegerType)
     ))
 
-    val df = spark.read
+    def fixedWidthPartitions: Int = spark.read
       .format("fixedwidth-custom-scala")
       .option("field_lengths", "0:10,10:13")
       .schema(schema)
       .load(s"$testDataPath/multi_file_*.txt")
+      .rdd.getNumPartitions
 
-    // Should have at least 3 partitions (one per file minimum)
-    assert(df.rdd.getNumPartitions >= 3, s"Expected >= 3 partitions for 3 files, got ${df.rdd.getNumPartitions}")
+    def csvPartitions: Int = spark.read
+      .format("csv")
+      .schema(schema)
+      .load(s"$testDataPath/multi_file_*.txt")
+      .rdd.getNumPartitions
+
+    // (1) Whatever this machine plans, it must equal the built-in CSV source
+    assert(fixedWidthPartitions == csvPartitions,
+      s"Fixed-width planning must match CSV: got $fixedWidthPartitions vs CSV $csvPartitions")
+
+    // (2) Deterministic check: with no open-cost and no per-core floor, the three
+    // tiny files must bin-pack into a single partition — on any machine
+    val confs = Seq(
+      "spark.sql.files.openCostInBytes" -> "0",
+      "spark.sql.files.minPartitionNum" -> "1"
+    )
+    // Unset optional confs may surface as an exception OR as a null value
+    val previous = confs.map { case (k, _) =>
+      k -> scala.util.Try(Option(spark.conf.get(k))).toOption.flatten
+    }
+    confs.foreach { case (k, v) => spark.conf.set(k, v) }
+    try {
+      assert(fixedWidthPartitions == 1,
+        s"Expected 3 tiny files to bin-pack into 1 partition, got $fixedWidthPartitions")
+      assert(csvPartitions == 1,
+        s"CSV reference should also give 1 partition, got $csvPartitions")
+    } finally {
+      previous.foreach {
+        case (k, Some(v)) => spark.conf.set(k, v)
+        case (k, None)    => spark.conf.unset(k)
+      }
+    }
   }
 
   test("glob pattern: reads specific files with brace expansion") {
