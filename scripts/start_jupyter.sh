@@ -15,8 +15,10 @@ export PATH=$SPARK_HOME/bin:$PATH
 export PATH=$PATH:/usr/local/bin
 export PYTHONPATH=$SPARK_HOME/python:$SPARK_HOME/python/lib/py4j-0.10.9.7-src.zip:$PYTHONPATH
 
-# Find the fixed-width JAR
-FIXEDWIDTH_JAR=$(find "$(pwd)/target/scala-2.13" -name "spark-fixedwidth-datasource_2.13-*.jar" | head -n 1)
+# Find the fixed-width JAR (newest one, resolved relative to the repo root
+# so the script works no matter which directory it is launched from)
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+FIXEDWIDTH_JAR=$(ls -t "$REPO_ROOT"/target/scala-2.13/spark-fixedwidth-datasource_2.13-*.jar 2>/dev/null | head -n 1)
 
 # Optional: point to your compiled fixed-width JAR
 if [ -n "$FIXEDWIDTH_JAR" ]; then
