@@ -16,7 +16,6 @@ import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.sources.DataSourceRegister
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
-import org.apache.spark.util.Utils
 
 import com.alexandertimmer.fixedwidth.{FWUtils, FixedWidthConstants}
 
@@ -68,7 +67,25 @@ class FixedWidthDataSourceV2 extends TableProvider with DataSourceRegister {
     val hadoopConf = sparkSession.sessionState.newHadoopConfWithOptions(
       map.asCaseSensitiveMap().asScala.toMap)
     val name = shortName() + " " + paths.map(qualifiedPathName(_, hadoopConf)).mkString(",")
-    Utils.redact(sparkSession.sessionState.conf.stringRedactionPattern, name)
+    redactSensitive(name)
+  }
+
+  /**
+   * Applies `spark.sql.redaction.string.regex` to the display name. Inlined
+   * instead of calling `org.apache.spark.util.Utils.redact`: that internal
+   * helper's signature differs between OSS Spark and Databricks runtimes
+   * (NoSuchMethodError on DBR 17.x). The name is display-only, so any linkage
+   * problem falls back to the unredacted name instead of failing the read.
+   */
+  private def redactSensitive(text: String): String = {
+    try {
+      sparkSession.sessionState.conf.stringRedactionPattern match {
+        case Some(regex) => regex.replaceAllIn(text, "*********(redacted)")
+        case None => text
+      }
+    } catch {
+      case _: LinkageError => text
+    }
   }
 
   private def qualifiedPathName(path: String, hadoopConf: Configuration): String = {

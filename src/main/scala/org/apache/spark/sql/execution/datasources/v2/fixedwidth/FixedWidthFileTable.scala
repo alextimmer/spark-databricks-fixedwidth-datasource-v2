@@ -57,6 +57,24 @@ case class FixedWidthFileTable(
   private def schemaFromOptions: StructType =
     FWUtils.appendSpecialColumns(FWUtils.inferBaseSchema(options), options)
 
+  // NOTE on the re-implemented bodies below: they mirror FileTable's logic but
+  // deliberately avoid Spark-internal helper objects (SchemaUtils,
+  // PartitioningUtils, QueryCompilationErrors) whose method signatures differ
+  // between OSS Spark and Databricks runtimes and cause NoSuchMethodError when
+  // this jar (compiled against OSS) runs on DBR. The trivial logic is inlined.
+
+  /** `PartitioningUtils.getColName` inlined (internal-API-safe). */
+  private def colName(field: StructField, caseSensitive: Boolean): String =
+    if (caseSensitive) field.name else field.name.toLowerCase(java.util.Locale.ROOT)
+
+  /** `SchemaUtils.checkSchemaColumnNameDuplication` inlined (internal-API-safe). */
+  private def checkNoDuplicateColumns(schema: StructType, caseSensitive: Boolean): Unit = {
+    val duplicates = schema.fields.map(colName(_, caseSensitive))
+      .groupBy(identity).collect { case (name, group) if group.length > 1 => name }
+    require(duplicates.isEmpty,
+      s"Found duplicate column(s) in the schema: ${duplicates.mkString(", ")}")
+  }
+
   // Guarded re-implementation of FileTable.dataSchema (super access to a lazy
   // val is not possible): identical behavior when the location exists.
   override lazy val dataSchema: StructType = {
@@ -68,8 +86,8 @@ case class FixedWidthFileTable(
       }.orElse {
         inferSchema(fileIndex.allFiles())
       }.getOrElse {
-        throw org.apache.spark.sql.errors.QueryCompilationErrors
-          .dataSchemaNotSpecifiedError(formatName)
+        throw new IllegalArgumentException(
+          s"Unable to infer schema for $formatName. It must be specified manually.")
       }
       schema.asNullable
     } else {
@@ -81,19 +99,14 @@ case class FixedWidthFileTable(
   // exists; a not-yet-existing location has no partition directories to merge.
   override lazy val schema: StructType = {
     val caseSensitive = sparkSession.sessionState.conf.caseSensitiveAnalysis
-    org.apache.spark.sql.util.SchemaUtils.checkSchemaColumnNameDuplication(
-      dataSchema, caseSensitive)
+    checkNoDuplicateColumns(dataSchema, caseSensitive)
     if (fileIndexResolves) {
       val partitionSchema = fileIndex.partitionSchema
-      org.apache.spark.sql.util.SchemaUtils.checkSchemaColumnNameDuplication(
-        partitionSchema, caseSensitive)
-      val partitionNameSet: Set[String] = partitionSchema.fields
-        .map(org.apache.spark.sql.execution.datasources.PartitioningUtils
-          .getColName(_, caseSensitive)).toSet
+      checkNoDuplicateColumns(partitionSchema, caseSensitive)
+      val partitionNameSet: Set[String] =
+        partitionSchema.fields.map(colName(_, caseSensitive)).toSet
       val fields = dataSchema.fields.filterNot { field =>
-        val colName = org.apache.spark.sql.execution.datasources.PartitioningUtils
-          .getColName(field, caseSensitive)
-        partitionNameSet.contains(colName)
+        partitionNameSet.contains(colName(field, caseSensitive))
       } ++ partitionSchema.fields
       StructType(fields)
     } else {
