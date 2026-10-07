@@ -5,6 +5,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.sql.types.Decimal
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
+import java.nio.charset.Charset
 import java.sql.{Date, Timestamp}
 import java.time.{LocalDate, LocalDateTime, ZoneId}
 import java.time.format.DateTimeFormatter
@@ -475,5 +476,27 @@ object FWUtils {
     }
 
     mapper.writeValueAsString(rescuedMap)
+  }
+
+  /**
+   * True when `"\n"` encodes to the single byte 0x0A in `charset` (UTF-8, ISO-8859-x,
+   * windows-125x, US-ASCII). False for EBCDIC (0x25) and UTF-16/32 (multi-byte).
+   * Hadoop's LineRecordReader default mode scans raw bytes for 0x0A/0x0D, so for
+   * charsets returning false an explicit `lineSep` must be used.
+   */
+  def lineFeedIsSingleByte(charset: Charset): Boolean =
+    encodeLineSep("\n", charset).toSeq == Seq(0x0A.toByte)
+
+  /**
+   * Encodes a record delimiter in `charset` WITHOUT any byte-order mark.
+   * Some encoders (the plain `UTF-16` charset) emit a BOM at the start of every
+   * encode call; encoding a one-char prefix together with the separator and
+   * dropping the prefix's bytes removes it deterministically.
+   */
+  def encodeLineSep(sep: String, charset: Charset): Array[Byte] = {
+    require(sep.nonEmpty, FixedWidthConstants.ErrorMessages.emptyLineSep)
+    val prefix = "x"
+    val prefixLen = prefix.getBytes(charset).length
+    (prefix + sep).getBytes(charset).drop(prefixLen)
   }
 }

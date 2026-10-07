@@ -246,7 +246,8 @@ class LineEndingSplitSpec extends AnyFunSuite {
 
   // l
   test("Cp1047 (EBCDIC) LF-terminated file, split, yields 100 unique rows") {
-    // EBCDIC LF is 0x25, not 0x0A. The reader must derive the delimiter from the charset.
+    // EBCDIC LF is 0x15 in JDK Cp1047, not 0x0A. The reader must derive the delimiter
+    // from the charset.
     withTempDir { dir =>
       val file = writeFile(dir, "ebcdic.dat", joined(rows100, "\n"), Charset.forName("Cp1047"))
       val df = readFixedWidth(FieldLengths, withCorruptSchema,
@@ -254,5 +255,25 @@ class LineEndingSplitSpec extends AnyFunSuite {
       assert(df.rdd.getNumPartitions >= 2)
       assertExactly100(df)
     }
+  }
+
+  // m
+  test("FWUtils charset helpers: lineFeedIsSingleByte and encodeLineSep") {
+    val utf8 = StandardCharsets.UTF_8
+    val utf16 = StandardCharsets.UTF_16
+    val ebcdic = Charset.forName("Cp1047")
+
+    assert(FWUtils.lineFeedIsSingleByte(utf8))
+    assert(FWUtils.lineFeedIsSingleByte(StandardCharsets.ISO_8859_1))
+    assert(!FWUtils.lineFeedIsSingleByte(ebcdic))
+    assert(!FWUtils.lineFeedIsSingleByte(utf16))
+
+    assert(FWUtils.encodeLineSep("\n", utf8).toSeq == Seq(0x0A.toByte))
+    assert(FWUtils.encodeLineSep("\r\n", utf8).toSeq == Seq(0x0D.toByte, 0x0A.toByte))
+    // JDK Cp1047 maps U+000A to 0x15 (0x25 is NEL/U+0085 in Cp1047, unlike older
+    // EBCDIC tables); verified with "\n".getBytes("Cp1047") — the plan's 0x25 was wrong.
+    assert(FWUtils.encodeLineSep("\n", ebcdic).toSeq == Seq(0x15.toByte))
+    // UTF-16 encoder emits a BOM on every fresh encode; the helper must strip it.
+    assert(FWUtils.encodeLineSep("\n", utf16).toSeq == Seq(0x00.toByte, 0x0A.toByte))
   }
 }

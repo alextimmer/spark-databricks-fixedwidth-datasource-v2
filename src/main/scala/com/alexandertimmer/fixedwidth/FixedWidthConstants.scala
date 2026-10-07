@@ -177,6 +177,9 @@ object FixedWidthConstants {
 
     def structurallyMalformedRecord(line: String): String =
       s"Structurally malformed record (row too short): $line"
+
+    def emptyLineSep: String =
+      "'lineSep' cannot be an empty string"
   }
 
   // ===========================================================================
