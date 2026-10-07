@@ -7,8 +7,13 @@ import org.apache.spark.sql.connector.read._
 import org.apache.spark.sql.types.{StructType, StructField}
 import org.apache.spark.unsafe.types.UTF8String
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.{FSDataInputStream, Path}
-import org.apache.hadoop.io.compress.CompressionCodecFactory
+import org.apache.hadoop.fs.Path
+import org.apache.hadoop.io.Text
+import org.apache.hadoop.mapreduce.{JobID, TaskAttemptID, TaskID, TaskType}
+import org.apache.hadoop.mapreduce.lib.input.{FileSplit, LineRecordReader}
+import org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl
+
+import java.nio.charset.Charset
 
 /**
  * Partition reader for fixed-width formatted files.
@@ -16,9 +21,12 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory
  * This reader processes a byte range of a fixed-width file, parsing each line
  * according to the configured field positions and schema. It handles:
  *
- *  - '''Byte-based Partitioning''': Reads from `startByte` to `startByte + lengthBytes`,
- *    with proper handling of partial lines at partition boundaries
- *  - '''Compressed Files''': Automatically decompresses using Hadoop codecs
+ *  - '''Byte-based Partitioning''': Processes the `PartitionedFile` range `[startByte,
+ *    startByte + lengthBytes)` with byte-exact boundaries for every line ending
+ *  - '''Line Reading''': Delegated to Hadoop's `LineRecordReader`: CR, LF and CRLF are
+ *    auto-detected (or an explicit `lineSep` delimiter is used), split ownership follows the
+ *    standard Hadoop protocol (discard the leading partial record when `start > 0`, read one
+ *    record past `end`), and codecs are handled natively (whole-file gz, block-aligned bz2)
  *  - '''Error Handling''': Supports PERMISSIVE, DROPMALFORMED, and FAILFAST modes
  *  - '''Special Columns''': Populates `_corrupt_record` and `_rescued_data` columns
  *  - '''Type Conversion''': Casts parsed strings to schema-defined types
@@ -57,6 +65,7 @@ import org.apache.hadoop.io.compress.CompressionCodecFactory
  * @param timestampFormat timestamp parsing format
  * @param timeZone timezone for parsing
  * @param comment comment line indicator
+ * @param lineSep optional explicit record delimiter (encoded with `encoding`); None = auto-detect
  * @since 0.1.0
  */
 class FixedWidthPartitionReader(
@@ -83,69 +92,36 @@ class FixedWidthPartitionReader(
     emptyValue: Option[String] = None,
     nanValue: String = "NaN",
     positiveInf: String = "Inf",
-    negativeInf: String = "-Inf"
+    negativeInf: String = "-Inf",
+    lineSep: Option[String] = None
 ) extends PartitionReader[InternalRow] {
 
-  private val path = new Path(pathStr)
-  private val fs = path.getFileSystem(hadoopConf)
+  private val charset: Charset = Charset.forName(encoding)
 
-  // Check if file is compressed
-  private val codecFactory = new CompressionCodecFactory(hadoopConf)
-  private val codec = Option(codecFactory.getCodec(path))
-  private val isCompressed = codec.isDefined
-
-  // For compressed files, we always read from the beginning and process entire file
-  // For uncompressed files, we use byte-based partitioning
-  private val effectiveStart: Long = if (isCompressed) 0L else startByte
-  private val effectiveLength: Long = if (isCompressed) fs.getFileStatus(path).getLen else lengthBytes
-  private val effectiveIsFirstSplit: Boolean = if (isCompressed) true else isFirstSplit
-
-  private val stream: FSDataInputStream = fs.open(path)
-
-  // Track bytes read to know when to stop for this partition
-  private var bytesRead: Long = 0
-  private val endPosition: Long = effectiveStart + effectiveLength
-
-  // Create input stream (potentially decompressed)
-  private val inputStream: java.io.InputStream = codec match {
-    case Some(c) => c.createInputStream(stream)
-    case None =>
-      // Seek to start position and handle alignment for non-first splits
-      val adjustedStart = if (!effectiveIsFirstSplit && effectiveStart > 0) {
-        // Check if previous byte was a newline (meaning we're at line start)
-        stream.seek(effectiveStart - 1)
-        val prevByte = stream.read()
-        if (prevByte == '\n') {
-          effectiveStart
-        } else {
-          // We're mid-line, skip to next line
-          stream.seek(effectiveStart)
-          val tempReader = new java.io.BufferedReader(new java.io.InputStreamReader(stream, encoding))
-          val partialLine = tempReader.readLine()
-          if (partialLine != null) {
-            bytesRead += partialLine.getBytes(encoding).length + 1
-          }
-          effectiveStart + bytesRead
-        }
-      } else {
-        effectiveStart
-      }
-
-      stream.seek(adjustedStart)
-      stream
+  // Hadoop's LineRecordReader owns everything that used to be hand-rolled here:
+  // file open + seek, codec detection (whole file for gz, block-aligned splits for
+  // bz2), split-boundary record ownership (the leading partial record is discarded
+  // when startByte > 0, one extra record is read past the split end), CR/LF/CRLF
+  // detection (default) or an explicit `lineSep` delimiter, and UTF-8 BOM skipping.
+  // This replaces the former `bytesRead += line.getBytes(encoding).length + 1`
+  // accounting, which undercounted CRLF lines by one byte and made splits overlap.
+  private val recordReader: LineRecordReader = {
+    val split = new FileSplit(new Path(pathStr), startByte, lengthBytes, Array.empty[String])
+    val attemptId = new TaskAttemptID(new TaskID(new JobID(), TaskType.MAP, 0), 0)
+    val context = new TaskAttemptContextImpl(hadoopConf, attemptId)
+    val rr = lineSep match {
+      case Some(sep) => new LineRecordReader(FWUtils.encodeLineSep(sep, charset))
+      case None      => new LineRecordReader()
+    }
+    rr.initialize(split, context)
+    rr
   }
 
-  private val reader = new java.io.BufferedReader(
-    new java.io.InputStreamReader(inputStream, encoding)
-  )
-
-  // Skip header lines only on first partition (or for compressed files)
-  private val linesToSkip = if (effectiveIsFirstSplit) skipLines else 0
-  for (_ <- 0 until linesToSkip) {
-    val skippedLine = reader.readLine()
-    if (skippedLine != null) {
-      bytesRead += skippedLine.getBytes(encoding).length + 1
-    }
+  // Header / skip_lines: only the split starting at byte 0 contains the header.
+  // LineRecordReader has already discarded the leading partial record when startByte > 0.
+  if (isFirstSplit) {
+    var skipped = 0
+    while (skipped < skipLines && recordReader.nextKeyValue()) skipped += 1
   }
 
   // CSV default behavior for auto-detection:
@@ -182,36 +158,22 @@ class FixedWidthPartitionReader(
     r
   }
 
-  override def close(): Unit = {
-    reader.close()
-    stream.close()
-  }
+  override def close(): Unit = recordReader.close() // closes the stream, returns the decompressor to the pool
 
   /**
-   * Read the next line from the file, respecting partition byte boundaries.
-   * Returns None when we've passed the end of this partition's byte range.
-   * For compressed files, reads until EOF (no byte-based splitting).
+   * Read the next line of this split. Returns None at the end of the split.
+   * Split boundaries, line endings and compression are handled by LineRecordReader.
    */
   private def readNextLine(): Option[String] = {
-    // For compressed files, we read until EOF (no byte-based boundary checking)
-    // For uncompressed files, check if we've read past our partition's byte range
-    if (!isCompressed) {
-      if (effectiveStart + bytesRead >= endPosition) {
-        return None
-      }
-    }
-
-    val line = reader.readLine()
-    if (line == null) {
+    if (!recordReader.nextKeyValue()) {
       None
     } else {
-      if (!isCompressed) {
-        bytesRead += line.getBytes(encoding).length + 1  // +1 for newline
-      }
+      val text: Text = recordReader.getCurrentValue // reused buffer: copy out immediately
+      val line = new String(text.getBytes, 0, text.getLength, charset)
       // Apply comment filtering
       comment match {
         case Some(c) if line.nonEmpty && line.charAt(0) == c =>
-          readNextLine()  // Skip comment line, try next
+          readNextLine() // Skip comment line, try next
         case _ =>
           Some(line)
       }
