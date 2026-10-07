@@ -274,6 +274,28 @@ Character encoding for reading files.
 .option("encoding", "windows-1252")
 ```
 
+#### `lineSep`
+
+| Property     | Value                                   |
+|--------------|-----------------------------------------|
+| **Required** | No                                      |
+| **Default**  | Auto-detect (`\n`, `\r\n`, `\r`)        |
+| **Type**     | String (non-empty)                      |
+
+Explicit record delimiter for **reading**. The value is encoded with `encoding`, so
+`"\n"` becomes `0x0A` for UTF-8 and `0x15` for `Cp1047`. When unset, line endings are
+auto-detected for charsets where LF is the single byte `0x0A`; for EBCDIC and
+UTF-16/32 the reader defaults to `"\n"` in that charset (set `lineSep` to `"\r\n"`
+explicitly if such a file uses CRLF). UTF-8 byte-order marks are skipped.
+
+```python
+.option("lineSep", "|")                              # custom single-char delimiter
+.option("encoding", "Cp1047").option("lineSep", "\n") # explicit EBCDIC LF
+```
+
+`lineEnding` is a **write-only** option. Passing it on read is ignored (a one-time
+warning is logged).
+
 ---
 
 ### Header Options
@@ -650,7 +672,9 @@ Controls alignment of field values within their fixed-width columns.
 | **Default**  | System line separator (`System.lineSeparator()`) |
 | **Type**     | String                                           |
 
-Line ending sequence appended after each row.
+Line ending sequence appended after each row. **Write-only**: when passed to a read
+it is ignored and a one-time warning is logged; readers auto-detect LF/CRLF/CR or
+use `lineSep`.
 
 ```python
 .option("lineEnding", "\n")     # Unix (LF)
@@ -725,6 +749,7 @@ schema = StructType([
 df = spark.read.format("fixedwidth-custom-scala") \
     .option("field_lengths", "0:12,12:27,27:35") \
     .option("encoding", "Cp1047") \
+    .option("lineSep", "\n") \  # optional: this is the derived default for EBCDIC
     .option("dateFormat", "yyyyMMdd") \
     .option("nullValue", "        ") \
     .option("trimValues", "true") \
@@ -839,6 +864,7 @@ The following table maps every standard Spark CSV reader/writer option to its st
 | CSV Option                  | Fixed-Width Option          | Default                       | Notes                                           |
 |-----------------------------|-----------------------------|-------------------------------|-------------------------------------------------|
 | `encoding` / `charset`      | `encoding`                  | `UTF-8`                       | Any Java `Charset` name                         |
+| `lineSep`                   | `lineSep`                   | Auto-detect (LF, CRLF, CR)    | Explicit read delimiter, encoded with `encoding` |
 | `comment`                   | `comment`                   | None                          | Single character; skips matching lines          |
 | `header`                    | `header` / `skip_lines`     | `false` / `0`                 | `header=true` equivalent to `skip_lines=1`      |
 | `mode`                      | `mode`                      | `PERMISSIVE`                  | `PERMISSIVE`, `DROPMALFORMED`, `FAILFAST`       |
@@ -881,7 +907,6 @@ These options could be useful but are not yet supported.
 |---------------------------------|----------|----------------------------------------------------------------------------------------|
 | `inferSchema`                   | Low      | Type inference from data; currently requires explicit schema or defaults to StringType |
 | `locale`                        | Low      | Locale-sensitive number/date parsing (e.g., `de_DE` for comma decimals)                |
-| `lineSep`                       | Medium   | Custom line separator for reading (write-side `lineEnding` is supported)               |
 | `timestampNTZFormat`            | Low      | Timestamp without timezone format                                                      |
 | `enforceSchema`                 | Low      | Schema enforcement vs. schema merging                                                  |
 | `preferDate`                    | Low      | Prefer DateType over TimestampType during inference                                    |

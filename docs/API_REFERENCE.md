@@ -165,7 +165,7 @@ Alignment of field values within their fixed-width columns.
 
 #### `lineEnding`
 
-Line ending sequence for output files.
+Line ending sequence for output files. Write-only; ignored on read (one-time warning).
 
 | Property | Value |
 |----------|-------|
@@ -303,6 +303,20 @@ Character encoding for reading files.
 .option("encoding", "ISO-8859-1")
 .option("encoding", "UTF-16")
 .option("encoding", "windows-1252")
+```
+
+#### `lineSep`
+
+Explicit record delimiter for reading, encoded with `encoding`.
+
+| Property | Value |
+|----------|-------|
+| **Default** | Auto-detect (`\n`, `\r\n`, `\r`) |
+| **Type** | String (non-empty) |
+
+```python
+.option("lineSep", "|")                              # custom single-char delimiter
+.option("encoding", "Cp1047").option("lineSep", "\n") # explicit EBCDIC LF
 ```
 
 ### Header Options

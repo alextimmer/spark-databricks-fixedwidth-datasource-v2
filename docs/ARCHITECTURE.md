@@ -219,7 +219,7 @@ the scan). Partition-column pruning and the `_metadata` request are honored.
 | `maxPartitionBytes` option | Takes precedence over the session-conf-derived split size |
 | `numPartitions` + single splittable file | Exact partition count (pre-migration semantics) |
 | `numPartitions` + multiple files | Global target: split size `ceil(totalBytes / n)` fed into native bin-packing |
-| Compressed file | Never split (single `PartitionedFile`), regardless of options |
+| Compressed file | Non-splittable codec (gz): never split. Splittable codec (bz2): split, read block-aligned by `LineRecordReader` |
 | Hive-partitioned directory layout | Native planning (datasource planning options don't apply) |
 
 **Key Options:**
@@ -244,8 +244,8 @@ many small files into few partitions using the session's
 Files:  [══ A ══════════════════][═ B ═][═ C ═][══ D ══════]
 Packed: │ Partition 1: A(0-128M) │ Partition 2: A(128M-end), B, C │ Partition 3: D │
 
-Split N (start > 0): reader seeks to byte offset, skips the partial line,
-reads to byte limit + completes the last line (unchanged boundary logic).
+Split N (start > 0): Hadoop LineRecordReader discards the leading partial record and
+reads one record past the split end (standard Hadoop split ownership; byte-exact for CR/LF/CRLF).
 ```
 
 ---
@@ -256,16 +256,17 @@ reads to byte limit + completes the last line (unchanged boundary logic).
 
 | Property | Value |
 |----------|-------|
-| **Technology** | Spark `PartitionReader[InternalRow]`, Hadoop FS API |
+| **Technology** | Spark `PartitionReader[InternalRow]`, Hadoop mapreduce `LineRecordReader` |
 | **Responsibilities** | Line parsing, field extraction, type conversion, error handling |
-| **Key Dependencies** | `FWUtils`, Hadoop `FSDataInputStream`, Jackson JSON |
+| **Key Dependencies** | `FWUtils`, Hadoop `LineRecordReader`, Jackson JSON |
 | **Design Pattern** | Iterator Pattern |
 
 **Key Features:**
 
 | Feature | Implementation |
 |---------|----------------|
-| **Compression Support** | Auto-detect via `CompressionCodecFactory` (gzip, bzip2, etc.) |
+| **Compression Support** | Delegated to `LineRecordReader` (whole-file gz; block-aligned bz2 splits) |
+| **Line Endings** | CR/LF/CRLF auto-detect, or explicit `lineSep` (bytes in file `encoding`) |
 | **Charset Support** | Configurable encoding (default: UTF-8) |
 | **Line Trimming** | Configurable leading/trailing whitespace removal |
 | **Null Handling** | Custom `nullValue` option for NULL representation |
@@ -313,7 +314,7 @@ which is what makes `input_file_name()` return real values. When requested,
 Hive-style partition values and the `_metadata` struct are appended via
 `PartitionReaderWithPartitionValues`.
 
-All parsing configuration (field positions, mode, encoding, trim, nullValue,
+All parsing configuration (field positions, mode, encoding, lineSep, trim, nullValue,
 date/timestamp formats, NaN/Inf strings, rescued/corrupt column names) is
 resolved on the Driver in `createReaderFactory()` and serialized to executors
 (`SerializableConfiguration` for the Hadoop conf), avoiding the anti-pattern
@@ -390,11 +391,10 @@ sequenceDiagram
 
     Note over Reader: Parallel Execution
     App->>Reader: createReader(partition)
-    Reader->>Hadoop: open(path)
-    Reader->>Hadoop: seek(startByte)
+    Reader->>Hadoop: LineRecordReader.initialize(FileSplit(start, length))
 
     loop For each line
-        Reader->>Reader: readLine()
+        Reader->>Hadoop: nextKeyValue() / getCurrentValue()
         Reader->>Utils: extractFields()
         Reader->>Utils: cast() per field
         Reader-->>App: InternalRow
@@ -454,7 +454,7 @@ sequenceDiagram
 flowchart TB
     subgraph Build["Build Environment"]
         SBT["sbt package"]
-        JAR["spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar"]
+        JAR["spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar"]
     end
 
     subgraph Deploy["Deployment Options"]
@@ -565,7 +565,7 @@ maxPartitionBytes tuning:
 
 | Limitation | Impact | Workaround |
 |------------|--------|------------|
-| **Compressed files cannot be split** | Single partition for .gz files | Use uncompressed or splittable codecs (bzip2 is not; lz4 is) |
+| **Compressed files cannot be split** | Single partition for .gz files | Use uncompressed files or bzip2 (a `SplittableCompressionCodec`, split block-aligned since 0.2.1) |
 | **No push-down predicates** | Full file scan always | Pre-filter at storage level |
 | **Schema evolution** | Schema must match file structure | Version schemas explicitly |
 
@@ -573,7 +573,6 @@ maxPartitionBytes tuning:
 
 | Area | Issue | Priority |
 |------|-------|----------|
-| **CRLF byte counting** | `readNextLine()` uses `+1` for newline byte; should use actual byte length for CRLF accuracy | Low |
 | **Metadata columns** | `_file_path` only in rescued JSON | Medium |
 | **Statistics** | No file-level statistics collection | Low |
 

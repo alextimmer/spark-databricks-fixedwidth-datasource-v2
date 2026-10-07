@@ -18,8 +18,9 @@ import org.apache.spark.sql.Row
  *  - M6: Writer DecimalType support
  *  - M7: Writer Date/Timestamp formatting
  *
- * M3 (CRLF byte counting) and M8 (constants consolidation) are internal
- * improvements without externally observable behavior changes.
+ * M3 (CRLF byte counting) WAS externally observable (duplicated and shifted rows
+ * when a CRLF file was split); fixed in 0.2.1 and pinned by LineEndingSplitSpec.
+ * M8 (constants consolidation) is an internal improvement.
  */
 class MissingFunctionalitySpec extends AnyFunSuite {
 

@@ -148,7 +148,7 @@ cd sparkfixedwidthdatasource-scala
 sbt package
 
 # JAR location
-ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar
+ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar
 ```
 
 ### PySpark Local Installation
@@ -157,7 +157,7 @@ ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar
 
 ```bash
 # Start PySpark shell with the JAR
-pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar
+pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar
 
 # Now you can use the data source
 >>> df = spark.read.format("fixedwidth-custom-scala") \
@@ -170,7 +170,7 @@ pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT
 ```bash
 # Run a PySpark script with the JAR
 spark-submit \
-    --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar \
+    --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar \
     your_script.py
 ```
 
@@ -182,7 +182,7 @@ from pyspark.sql import SparkSession
 # Create Spark session with JAR
 spark = SparkSession.builder \
     .appName("FixedWidthReader") \
-    .config("spark.jars", "/path/to/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar") \
+    .config("spark.jars", "/path/to/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar") \
     .getOrCreate()
 
 # Use the data source
@@ -195,7 +195,7 @@ df = spark.read.format("fixedwidth-custom-scala") \
 
 ```bash
 # Set before starting Jupyter or Python
-export PYSPARK_SUBMIT_ARGS="--jars /path/to/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar pyspark-shell"
+export PYSPARK_SUBMIT_ARGS="--jars /path/to/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar pyspark-shell"
 
 # Then start Jupyter
 jupyter lab
@@ -250,8 +250,9 @@ If you get `Failed to find data source: fixedwidth-custom-scala`, the JAR is not
 | `timestampFormat` | No | `yyyy-MM-dd'T'HH:mm:ss` | Java DateTimeFormatter pattern for `TimestampType` columns |
 | `timeZone` | No | `UTC` | Timezone for date/timestamp parsing |
 | `comment` | No | — | Character marking comment lines to skip (e.g., `"#"`) |
+| `lineSep` | No | Auto-detect | Explicit record delimiter for reading (e.g. `"|"`), encoded with `encoding`. Default detects `\n`, `\r\n`, `\r` |
 | `maxPartitionBytes` | No | `134217728` | Maximum bytes per partition (128 MB). When unset, native Spark planning applies (session confs + cross-file bin-packing) |
-| `numPartitions` | No | Auto | Single file: exact partition count. Multiple files: global target (`ceil(totalBytes/n)` split size). Compressed files are never split |
+| `numPartitions` | No | Auto | Single file: exact partition count. Multiple files: global target (`ceil(totalBytes/n)` split size). gz files are never split; bz2 is split block-aligned |
 | `pathGlobFilter` | No | — | Glob pattern to filter file names when reading a directory (e.g., `"*.txt"`) |
 | `recursiveFileLookup` | No | `false` | Read files in nested subdirectories (disables partition-directory inference) |
 
@@ -265,7 +266,7 @@ If you get `Failed to find data source: fixedwidth-custom-scala`, the JAR is not
 | `field_simple` | Yes* | — | Alternative: field widths |
 | `paddingChar` | No | Space | Character used for padding fields to width |
 | `alignment` | No | `left` | Field alignment: `left` (right-pad) or `right` (left-pad) |
-| `lineEnding` | No | Platform | Line ending: `\n`, `\r\n`, or platform default |
+| `lineEnding` | No | Platform | Line ending: `\n`, `\r\n`, or platform default (write-only; ignored on read) |
 | `ignoreLeadingWhiteSpace` | No | `true` | Trim leading whitespace before padding |
 | `ignoreTrailingWhiteSpace` | No | `true` | Trim trailing whitespace before padding |
 | `emptyValue` | No | — | If StringType value matches, write as empty (all padding) |
@@ -467,7 +468,7 @@ sbt test
 
 After building, the JAR is located at:
 ```
-target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar
+target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar
 ```
 
 ### Interactive Testing with Jupyter
@@ -572,7 +573,7 @@ To use this library on Databricks:
 
 2. **Upload to Databricks**
    - Workspace → Create → Library → Upload JAR
-   - Or use DBFS: `dbfs:/FileStore/jars/spark-fixedwidth-datasource_2.13-0.2.0-SNAPSHOT.jar`
+   - Or use DBFS: `dbfs:/FileStore/jars/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar`
 
 3. **Attach to Cluster**
    - Cluster → Libraries → Install New → Choose uploaded JAR
