@@ -109,6 +109,7 @@ object FixedWidthConstants {
     val PADDING_CHAR = "paddingChar"
     val ALIGNMENT = "alignment"
     val LINE_ENDING = "lineEnding"
+    val LINE_SEP = "lineSep" // read-side record delimiter (CSV option name); lineEnding is write-only
     val SCHEMA_METADATA_WIDTHS = "schema_metadata_widths"
     val EMPTY_VALUE = "emptyValue"
     val NAN_VALUE = "nanValue"
@@ -180,6 +181,10 @@ object FixedWidthConstants {
 
     def emptyLineSep: String =
       "'lineSep' cannot be an empty string"
+
+    def lineEndingIgnoredOnRead: String =
+      "Option 'lineEnding' is write-only and is ignored when reading: line endings (LF, CRLF, CR) " +
+        "are auto-detected. Use 'lineSep' to force an explicit record delimiter on read."
   }
 
   // ===========================================================================
