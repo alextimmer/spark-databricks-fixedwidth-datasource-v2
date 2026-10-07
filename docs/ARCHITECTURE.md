@@ -454,7 +454,7 @@ sequenceDiagram
 flowchart TB
     subgraph Build["Build Environment"]
         SBT["sbt package"]
-        JAR["spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar"]
+        JAR["spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar"]
     end
 
     subgraph Deploy["Deployment Options"]
@@ -556,6 +556,29 @@ maxPartitionBytes tuning:
 - Increase: Reduce task overhead, need more memory
 - Decrease: Better parallelism, more task scheduling overhead
 ```
+
+### Read-path hot spots removed in 0.2.2
+
+| Site | Problem (pre-0.2.2) | Fix |
+|------|---------------------|-----|
+| `FWUtils.cast` | `DateTimeFormatter.ofPattern` ×2 and `ZoneId.of` built on every row | `FieldCaster` built once per partition |
+| `FWUtils.buildRescuedDataFromBadIndices` | `new ObjectMapper().registerModule(DefaultScalaModule)` per rescued row (module registration reflects over classes) | one shared, thread-safe `ObjectMapper` |
+| `extractAndTrimValues` | `replaceAll` regex per field for one-sided trim; tuple match per field | trim function resolved once; regex-free `stripLeadingSpace`/`stripTrailingSpace` |
+| `populateSpecialColumns` | linear column-name search up to 3× per row | `corruptColIdx`/`rescuedColIdx` precomputed |
+| `FWUtils.cast` Int/Long/Boolean | validation via `NumberFormatException` construction per bad value | exception-free `parseIntOrNull`/`parseLongOrNull`/`parseBooleanOrNull` (JDK-identical semantics) |
+
+Measured (4,279,452-row CRLF files, local 8 cores, medians of 3): clean count/sum
+3695/3600 ms → 1499/1415 ms (2.5×); 90 %-bad count/rescued-filter 224,905/275,627 ms
+→ 3405/3656 ms (66×/75×); GC per run ~1.1 s → ~45 ms. Benchmark:
+`spark-shell --driver-memory 4g --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-<version>.jar < scripts/bench/read_bench.scala`
+
+Emitting `UnsafeRow` (`UnsafeProjection`) was measured and rejected: 41–61 % slower on
+clean queries (per-row projection + copy outweighs the boxed-accessor savings), and it
+would reintroduce a Spark-internal catalyst call (DBR binary-compat risk).
+
+The scan itself is a row-based V2 source and runs outside Photon; a `RowToColumnar`
+step after the scan is inherent. Callers needing Photon-native speed can use
+`spark.read.text` + `substring`/`try_cast`, at the cost of CSV-style PERMISSIVE semantics.
 
 ---
 

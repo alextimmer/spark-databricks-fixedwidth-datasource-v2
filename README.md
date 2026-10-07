@@ -148,7 +148,7 @@ cd sparkfixedwidthdatasource-scala
 sbt package
 
 # JAR location
-ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar
+ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar
 ```
 
 ### PySpark Local Installation
@@ -157,7 +157,7 @@ ls target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar
 
 ```bash
 # Start PySpark shell with the JAR
-pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar
+pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar
 
 # Now you can use the data source
 >>> df = spark.read.format("fixedwidth-custom-scala") \
@@ -170,7 +170,7 @@ pyspark --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT
 ```bash
 # Run a PySpark script with the JAR
 spark-submit \
-    --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar \
+    --jars target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar \
     your_script.py
 ```
 
@@ -182,7 +182,7 @@ from pyspark.sql import SparkSession
 # Create Spark session with JAR
 spark = SparkSession.builder \
     .appName("FixedWidthReader") \
-    .config("spark.jars", "/path/to/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar") \
+    .config("spark.jars", "/path/to/spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar") \
     .getOrCreate()
 
 # Use the data source
@@ -195,7 +195,7 @@ df = spark.read.format("fixedwidth-custom-scala") \
 
 ```bash
 # Set before starting Jupyter or Python
-export PYSPARK_SUBMIT_ARGS="--jars /path/to/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar pyspark-shell"
+export PYSPARK_SUBMIT_ARGS="--jars /path/to/spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar pyspark-shell"
 
 # Then start Jupyter
 jupyter lab
@@ -468,7 +468,7 @@ sbt test
 
 After building, the JAR is located at:
 ```
-target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar
+target/scala-2.13/spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar
 ```
 
 ### Interactive Testing with Jupyter
@@ -573,7 +573,7 @@ To use this library on Databricks:
 
 2. **Upload to Databricks**
    - Workspace → Create → Library → Upload JAR
-   - Or use DBFS: `dbfs:/FileStore/jars/spark-fixedwidth-datasource_2.13-0.2.1-SNAPSHOT.jar`
+   - Or use DBFS: `dbfs:/FileStore/jars/spark-fixedwidth-datasource_2.13-0.2.2-SNAPSHOT.jar`
 
 3. **Attach to Cluster**
    - Cluster → Libraries → Install New → Choose uploaded JAR
