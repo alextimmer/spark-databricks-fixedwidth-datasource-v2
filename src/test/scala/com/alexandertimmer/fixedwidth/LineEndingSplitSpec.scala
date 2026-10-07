@@ -257,6 +257,20 @@ class LineEndingSplitSpec extends AnyFunSuite {
     }
   }
 
+  // n
+  test("CR-only file (classic Mac line endings) split by maxPartitionBytes=500 yields exactly 100 unique rows") {
+    // LineRecordReader's default mode treats a lone \r as a record terminator too;
+    // this pins that CR-only files are byte-exact at split boundaries like LF/CRLF.
+    withTempDir { dir =>
+      val file = writeFile(dir, "cr.txt", joined(rows100, "\r"))
+      val df = readFixedWidth(FieldLengths, withCorruptSchema,
+        Map("maxPartitionBytes" -> "500"))(file.toString)
+      assert(df.rdd.getNumPartitions >= 2,
+        s"1300-byte CR file at maxPartitionBytes=500 must split, got ${df.rdd.getNumPartitions}")
+      assertExactly100(df)
+    }
+  }
+
   // m
   test("FWUtils charset helpers: lineFeedIsSingleByte and encodeLineSep") {
     val utf8 = StandardCharsets.UTF_8

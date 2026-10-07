@@ -3,6 +3,7 @@ package com.alexandertimmer.fixedwidth
 
 import org.scalatest.funsuite.AnyFunSuite
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.connector.catalog.Table
 import org.apache.spark.sql.execution.datasources.v2.fixedwidth.{FixedWidthDataSourceV2, FixedWidthFileFormat, FixedWidthFileTable}
 import org.apache.spark.sql.functions.{col, input_file_name}
 import org.apache.spark.sql.types._
@@ -42,6 +43,14 @@ class FileScanMigrationSpec extends AnyFunSuite {
     StructField("name", StringType, nullable = true),
     StructField("id", IntegerType, nullable = true)
   ))
+
+  /**
+   * Public-API replacement for the deprecated `table.schema()` (deprecated since
+   * Spark 3.4). `CatalogV2Implicits.asSchema` is `private[sql]` and not reachable
+   * from this package, so the StructType is rebuilt from the public Column API.
+   */
+  private def tableSchema(table: Table): StructType =
+    StructType(table.columns.map(c => StructField(c.name, c.dataType, c.nullable)))
 
   private def readFixedWidth(fieldLengths: String,
                              schema: StructType,
@@ -287,7 +296,7 @@ class FileScanMigrationSpec extends AnyFunSuite {
     ).asJava)
 
     val table = provider.getTable(options)
-    val schema = table.schema()
+    val schema = tableSchema(table)
 
     val baseNames = FWUtils.inferBaseSchema(options).fieldNames.toSeq
     assert(schema.fieldNames.take(baseNames.length).toSeq == baseNames,
@@ -314,9 +323,9 @@ class FileScanMigrationSpec extends AnyFunSuite {
 
     val table = provider.getTable(options, userSchema)
 
-    assert(table.schema().fieldNames.toSeq ==
+    assert(tableSchema(table).fieldNames.toSeq ==
       Seq("name", "id", "_corrupt_record", "_rescued_data"),
-      s"Expected user schema + auto-appended rescued column, got ${table.schema().fieldNames.toSeq}")
+      s"Expected user schema + auto-appended rescued column, got ${tableSchema(table).fieldNames.toSeq}")
   }
 
   // ===========================================================================
