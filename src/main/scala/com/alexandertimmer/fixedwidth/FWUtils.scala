@@ -346,6 +346,145 @@ object FWUtils {
    * @param timeZone Optional timezone ID (default: system default)
    * @return Tuple of (casted values, indices of fields that failed conversion)
    */
+  /** Exactly the character class of Java regex `\s` (no UNICODE_CHARACTER_CLASS): [ \t\n\x0B\f\r]. */
+  @inline private def isRegexSpace(c: Char): Boolean =
+    c == ' ' || c == '\t' || c == '\n' || c == '\u000B' || c == '\f' || c == '\r'
+
+  /** Equivalent to `s.replaceAll("^\\s+", "")` without regex or allocation when nothing is stripped. */
+  def stripLeadingSpace(s: String): String = {
+    var i = 0
+    while (i < s.length && isRegexSpace(s.charAt(i))) i += 1
+    if (i == 0) s else s.substring(i)
+  }
+
+  /** Equivalent to `s.replaceAll("\\s+$", "")` without regex or allocation when nothing is stripped. */
+  def stripTrailingSpace(s: String): String = {
+    var j = s.length
+    while (j > 0 && isRegexSpace(s.charAt(j - 1))) j -= 1
+    if (j == s.length) s else s.substring(0, j)
+  }
+
+  /**
+   * Exception-free equivalent of `java.lang.Long.parseLong(s)` (= Scala `s.toLong`):
+   * optional single leading '+'/'-', at least one digit, digits via `Character.digit`
+   * (so Unicode decimal digits are accepted, as in the JDK), overflow -> null.
+   * Uses the JDK's negative-accumulation algorithm so Long.MinValue parses.
+   */
+  def parseLongOrNull(s: String): java.lang.Long = {
+    val len = s.length
+    if (len == 0) return null
+    var i = 0
+    var negative = false
+    val first = s.charAt(0)
+    if (first == '-') { negative = true; i = 1 } else if (first == '+') { i = 1 }
+    if (i == len) return null
+    val limit = if (negative) Long.MinValue else -Long.MaxValue
+    val multmin = limit / 10
+    var result = 0L
+    while (i < len) {
+      val d = Character.digit(s.charAt(i), 10)
+      if (d < 0 || result < multmin) return null
+      result *= 10
+      if (result < limit + d) return null
+      result -= d
+      i += 1
+    }
+    Long.box(if (negative) result else -result)
+  }
+
+  /** Exception-free equivalent of `java.lang.Integer.parseInt(s)` (= Scala `s.toInt`). */
+  def parseIntOrNull(s: String): java.lang.Integer = {
+    val l = parseLongOrNull(s)
+    if (l == null || l < Int.MinValue || l > Int.MaxValue) null else Int.box(l.toInt)
+  }
+
+  /** Exception-free equivalent of Scala `s.toBoolean`: only "true"/"false", case-insensitive. */
+  def parseBooleanOrNull(s: String): java.lang.Boolean =
+    if (s.equalsIgnoreCase("true")) java.lang.Boolean.TRUE
+    else if (s.equalsIgnoreCase("false")) java.lang.Boolean.FALSE
+    else null
+
+  /**
+   * Per-partition caster. Formatters and the zone are built ONCE here instead of on
+   * every row (the pre-0.2.2 `cast` rebuilt them per call). The per-value semantics
+   * are identical to the original `cast`.
+   */
+  final class FieldCaster(fields: Array[StructField],
+                          dateFormat: Option[String],
+                          timestampFormat: Option[String],
+                          timeZone: Option[String],
+                          nanValue: String,
+                          positiveInf: String,
+                          negativeInf: String) extends Serializable {
+
+    private val dateFormatter = DateTimeFormatter.ofPattern(dateFormat.getOrElse("yyyy-MM-dd"))
+    private val tsFormatter = DateTimeFormatter.ofPattern(timestampFormat.getOrElse("yyyy-MM-dd HH:mm:ss"))
+    private val zone = ZoneId.of(timeZone.getOrElse("UTC"))
+
+    def cast(values: Array[String]): (Array[Any], Array[Int]) = {
+      val out = new Array[Any](fields.length)
+      val badIndices = scala.collection.mutable.ArrayBuffer[Int]()
+
+      // Same effect as the NonFatal catch branch, without constructing an exception.
+      def markBad(idx: Int): Null = { badIndices += idx; null }
+
+      var i = 0
+      while (i < fields.length) {
+        val f = fields(i)
+        // Schema may have more fields than parsed values; nulls (from nullValue) stay null
+        val rawVal = if (i < values.length) values(i) else null
+
+        if (rawVal == null) {
+          out(i) = null
+        } else {
+          val v = rawVal
+          try {
+            out(i) = f.dataType match {
+              case StringType  => v
+              case IntegerType => if (v.isEmpty) null else { val r = parseIntOrNull(v); if (r == null) markBad(i) else r }
+              case LongType    => if (v.isEmpty) null else { val r = parseLongOrNull(v); if (r == null) markBad(i) else r }
+              case FloatType   => if (v.isEmpty) null
+                else if (v == nanValue) Float.NaN
+                else if (v == positiveInf) Float.PositiveInfinity
+                else if (v == negativeInf) Float.NegativeInfinity
+                else v.toFloat
+              case DoubleType  => if (v.isEmpty) null
+                else if (v == nanValue) Double.NaN
+                else if (v == positiveInf) Double.PositiveInfinity
+                else if (v == negativeInf) Double.NegativeInfinity
+                else v.toDouble
+              case BooleanType => if (v.isEmpty) null else { val r = parseBooleanOrNull(v); if (r == null) markBad(i) else r }
+              case DateType =>
+                if (v.isEmpty) null else {
+                  val parsedDate = LocalDate.parse(v, dateFormatter)
+                  ChronoUnit.DAYS.between(EPOCH_DATE, parsedDate).toInt
+                }
+              case TimestampType =>
+                if (v.isEmpty) null else {
+                  val parsedTs = LocalDateTime.parse(v.trim, tsFormatter)
+                  val instant = parsedTs.atZone(zone).toInstant
+                  instant.getEpochSecond * 1000000L + instant.getNano / 1000L
+                }
+              case dt: DecimalType =>
+                if (v.isEmpty) null else {
+                  Decimal(new java.math.BigDecimal(v.trim), dt.precision, dt.scale)
+                }
+              case _ => v
+            }
+          } catch {
+            case NonFatal(_) =>
+              out(i) = null
+              badIndices += i
+          }
+        }
+        i += 1
+      }
+
+      (out, badIndices.toArray)
+    }
+  }
+
+  /** Kept for API compatibility; builds a one-shot [[FieldCaster]]. Hot paths must hold a FieldCaster instead. */
   def cast(values: Array[String],
            fields: Array[StructField],
            dateFormat: Option[String] = None,
@@ -353,72 +492,8 @@ object FWUtils {
            timeZone: Option[String] = None,
            nanValue: String = "NaN",
            positiveInf: String = "Inf",
-           negativeInf: String = "-Inf"): (Array[Any], Array[Int]) = {
-
-    val out = new Array[Any](fields.length)
-    val badIndices = scala.collection.mutable.ArrayBuffer[Int]()
-
-    // Create formatters for date/timestamp parsing
-    val dateFormatter = DateTimeFormatter.ofPattern(dateFormat.getOrElse("yyyy-MM-dd"))
-    val tsFormatter = DateTimeFormatter.ofPattern(timestampFormat.getOrElse("yyyy-MM-dd HH:mm:ss"))
-    val zone = ZoneId.of(timeZone.getOrElse("UTC"))
-
-    fields.indices.foreach { i =>
-      val f = fields(i)
-      // Handle case where schema has more fields than parsed values
-      // Also preserve null values (from nullValue option)
-      val rawVal = if (i < values.length) values(i) else null
-
-      // If input is null (from nullValue matching), output is null
-      if (rawVal == null) {
-        out(i) = null
-      } else {
-        val v = rawVal
-        try {
-          out(i) = f.dataType match {
-            case StringType  => v
-            case IntegerType => if (v.isEmpty) null else v.toInt
-            case LongType    => if (v.isEmpty) null else v.toLong
-            case FloatType   => if (v.isEmpty) null
-              else if (v == nanValue) Float.NaN
-              else if (v == positiveInf) Float.PositiveInfinity
-              else if (v == negativeInf) Float.NegativeInfinity
-              else v.toFloat
-            case DoubleType  => if (v.isEmpty) null
-              else if (v == nanValue) Double.NaN
-              else if (v == positiveInf) Double.PositiveInfinity
-              else if (v == negativeInf) Double.NegativeInfinity
-              else v.toDouble
-            case BooleanType => if (v.isEmpty) null else v.toBoolean
-            case DateType =>
-              if (v.isEmpty) null else {
-                // Parse date and return days since epoch (Spark internal format)
-                val parsedDate = LocalDate.parse(v, dateFormatter)
-                ChronoUnit.DAYS.between(EPOCH_DATE, parsedDate).toInt
-              }
-            case TimestampType =>
-              if (v.isEmpty) null else {
-                // Parse timestamp and return microseconds since epoch (Spark internal format)
-                val parsedTs = LocalDateTime.parse(v.trim, tsFormatter)
-                val instant = parsedTs.atZone(zone).toInstant
-                instant.getEpochSecond * 1000000L + instant.getNano / 1000L
-              }
-            case dt: DecimalType =>
-              if (v.isEmpty) null else {
-                Decimal(new java.math.BigDecimal(v.trim), dt.precision, dt.scale)
-              }
-            case _ => v
-          }
-        } catch {
-          case NonFatal(_) =>
-            out(i) = null
-            badIndices += i
-        }
-      }
-    }
-
-    (out, badIndices.toArray)
-  }
+           negativeInf: String = "-Inf"): (Array[Any], Array[Int]) =
+    new FieldCaster(fields, dateFormat, timestampFormat, timeZone, nanValue, positiveInf, negativeInf).cast(values)
 
   /**
    * Check if a raw line has structural corruption for fixed-width parsing.
@@ -453,16 +528,17 @@ object FWUtils {
    * @param filePath Source file path
    * @return JSON string with failed field values and file path
    */
+  // ObjectMapper is thread-safe once configured. Pre-0.2.2 a new mapper (plus Scala module
+  // registration, which reflects over classes) was created for EVERY rescued row.
+  private lazy val rescuedDataMapper: com.fasterxml.jackson.databind.ObjectMapper =
+    new com.fasterxml.jackson.databind.ObjectMapper()
+      .registerModule(com.fasterxml.jackson.module.scala.DefaultScalaModule)
+
   def buildRescuedDataFromBadIndices(parsed: Array[String],
                                      badIndices: Array[Int],
                                      fields: Array[StructField],
                                      filePath: String,
                                      includeFilePath: Boolean = true): String = {
-    import com.fasterxml.jackson.databind.ObjectMapper
-    import com.fasterxml.jackson.module.scala.DefaultScalaModule
-
-    val mapper = new ObjectMapper().registerModule(DefaultScalaModule)
-
     val fieldMap = badIndices.flatMap { i =>
       if (i < fields.length && i < parsed.length) {
         Some(fields(i).name -> parsed(i))
@@ -475,7 +551,7 @@ object FWUtils {
       fieldMap
     }
 
-    mapper.writeValueAsString(rescuedMap)
+    rescuedDataMapper.writeValueAsString(rescuedMap)
   }
 
   /**

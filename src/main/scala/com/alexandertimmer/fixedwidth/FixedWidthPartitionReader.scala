@@ -148,6 +148,29 @@ class FixedWidthPartitionReader(
   // Get the actual field definitions for casting (in order)
   private val dataFields: Array[StructField] = dataFieldIndices.map(schema.fields(_))
 
+  // Built once per partition: date/timestamp formatters and zone are expensive to construct
+  private val caster = new FWUtils.FieldCaster(
+    dataFields, dateFormat, timestampFormat, timeZone, nanValue, positiveInf, negativeInf)
+
+  // ---- Per-reader precomputation (pre-0.2.2 these were recomputed per row / per field) ----
+
+  /** Trim strategy resolved once. (true,true) keeps String.trim (chars <= ' '), exactly as before. */
+  private val trimFn: String => String = (ignoreLeadingWhiteSpace, ignoreTrailingWhiteSpace) match {
+    case (true, true)   => (s: String) => s.trim
+    case (true, false)  => FWUtils.stripLeadingSpace
+    case (false, true)  => FWUtils.stripTrailingSpace
+    case (false, false) => identity[String]
+  }
+
+  /** Which data fields are StringType (need UTF8String wrapping). */
+  private val isStringField: Array[Boolean] = dataFields.map(_.dataType == org.apache.spark.sql.types.StringType)
+
+  private def findColIndex(name: String): Option[Int] =
+    schema.fieldNames.zipWithIndex.find(_._1 == name).map(_._2)
+
+  private val corruptColIdx: Option[Int] = corruptCol.flatMap(findColIndex)
+  private val rescuedColIdx: Option[Int] = rescuedCol.flatMap(findColIndex)
+
   private var nextRow: Option[InternalRow] = fetchNext()
 
   override def next(): Boolean = nextRow.isDefined
@@ -187,33 +210,24 @@ class FixedWidthPartitionReader(
    * @return array of extracted values (possibly null for nullValue matches)
    */
   private def extractAndTrimValues(line: String): Array[String] = {
-    positions.map { case (s, e) =>
+    val out = new Array[String](positions.length)
+    var i = 0
+    while (i < positions.length) {
+      val (s, e) = positions(i)
       val raw = if (s >= line.length) "" else line.substring(s, math.min(e, line.length))
-      // Apply conditional trimming
-      val trimmed = (ignoreLeadingWhiteSpace, ignoreTrailingWhiteSpace) match {
-        case (true, true) => raw.trim
-        case (true, false) => raw.replaceAll("^\\s+", "")
-        case (false, true) => raw.replaceAll("\\s+$", "")
-        case (false, false) => raw
-      }
-      // Apply nullValue check
-      nullValue match {
+      val trimmed = trimFn(raw)
+      out(i) = nullValue match {
         case Some(nv) if trimmed == nv => null
         case _ =>
-          // Apply emptyValue substitution (only for non-null, empty strings)
           emptyValue match {
             case Some(ev) if trimmed.isEmpty => ev
             case _ => trimmed
           }
       }
+      i += 1
     }
+    out
   }
-
-  /**
-   * Find the schema index for a column name.
-   */
-  private def findColIndex(name: String): Option[Int] =
-    schema.fieldNames.zipWithIndex.find(_._1 == name).map(_._2)
 
   /**
    * Build the data portion of the output row.
@@ -222,12 +236,12 @@ class FixedWidthPartitionReader(
    * @param buf output buffer to populate
    */
   private def populateDataFields(casted: Array[Any], buf: Array[Any]): Unit = {
-    dataFieldIndices.indices.foreach { i =>
-      val schemaIdx = dataFieldIndices(i)
-      buf(schemaIdx) = (casted(i), dataFields(i).dataType) match {
-        case (s: String, _: org.apache.spark.sql.types.StringType) => UTF8String.fromString(s)
-        case (v, _) => v
-      }
+    var i = 0
+    while (i < dataFieldIndices.length) {
+      val v = casted(i)
+      buf(dataFieldIndices(i)) =
+        if (isStringField(i) && v != null) UTF8String.fromString(v.asInstanceOf[String]) else v
+      i += 1
     }
   }
 
@@ -250,42 +264,36 @@ class FixedWidthPartitionReader(
     val needsRescue = isStructurallyCorrupt || badIndices.nonEmpty
 
     // Corrupt column: populated when there's corruption AND rescued column is NOT set
-    corruptCol.foreach { col =>
-      findColIndex(col).foreach { idx =>
-        buf(idx) =
-          if (needsRescue) {
-            // CSV-like behavior: if rescued column exists, corrupt stays NULL
-            if (rescuedCol.flatMap(findColIndex).isDefined) null
-            else UTF8String.fromString(parsed.mkString(","))
-          } else null
-      }
+    corruptColIdx.foreach { idx =>
+      buf(idx) =
+        if (needsRescue) {
+          // CSV-like behavior: if rescued column exists, corrupt stays NULL
+          if (rescuedColIdx.isDefined) null
+          else UTF8String.fromString(parsed.mkString(","))
+        } else null
     }
 
     // Rescued column: captures type conversion failures as JSON
-    rescuedCol.foreach { col =>
-      findColIndex(col).foreach { idx =>
-        if (needsRescue && badIndices.nonEmpty) {
-          buf(idx) = UTF8String.fromString(
-            FWUtils.buildRescuedDataFromBadIndices(parsed, badIndices, dataFields, pathStr, includeFilePathInRescuedData)
-          )
-        } else if (isStructurallyCorrupt) {
-          // Structural corruption without type failures - capture truncated fields
-          val truncatedIndices = dataFields.indices.filter { i =>
-            i < positions.length && {
-              val (start, end) = positions(i)
-              start >= line.length || end > line.length
-            }
-          }.toArray
-          if (truncatedIndices.nonEmpty) {
-            buf(idx) = UTF8String.fromString(
-              FWUtils.buildRescuedDataFromBadIndices(parsed, truncatedIndices, dataFields, pathStr, includeFilePathInRescuedData)
-            )
-          } else {
-            buf(idx) = null
+    rescuedColIdx.foreach { idx =>
+      if (needsRescue && badIndices.nonEmpty) {
+        buf(idx) = UTF8String.fromString(
+          FWUtils.buildRescuedDataFromBadIndices(parsed, badIndices, dataFields, pathStr, includeFilePathInRescuedData))
+      } else if (isStructurallyCorrupt) {
+        // Structural corruption without type failures - capture truncated fields
+        val truncatedIndices = dataFields.indices.filter { i =>
+          i < positions.length && {
+            val (start, end) = positions(i)
+            start >= line.length || end > line.length
           }
+        }.toArray
+        if (truncatedIndices.nonEmpty) {
+          buf(idx) = UTF8String.fromString(
+            FWUtils.buildRescuedDataFromBadIndices(parsed, truncatedIndices, dataFields, pathStr, includeFilePathInRescuedData))
         } else {
           buf(idx) = null
         }
+      } else {
+        buf(idx) = null
       }
     }
   }
@@ -310,7 +318,7 @@ class FixedWidthPartitionReader(
         val parsed = extractAndTrimValues(line)
 
         // Cast values and track failures
-        val (casted, badIndices) = FWUtils.cast(parsed, dataFields, dateFormat, timestampFormat, timeZone, nanValue, positiveInf, negativeInf)
+        val (casted, badIndices) = caster.cast(parsed)
         val hasTypeConversionFailure = badIndices.nonEmpty
 
         // FAILFAST: throw on type conversion failures
