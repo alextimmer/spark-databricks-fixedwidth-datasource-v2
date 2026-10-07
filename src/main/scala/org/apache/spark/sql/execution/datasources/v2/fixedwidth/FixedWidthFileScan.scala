@@ -18,6 +18,8 @@ import org.apache.spark.util.SerializableConfiguration
 import com.alexandertimmer.fixedwidth.{FWUtils, FixedWidthConstants}
 import com.alexandertimmer.fixedwidth.FixedWidthConstants.{OptionKeys => Keys}
 
+import java.nio.charset.Charset
+
 /**
  * [[TextBasedFileScan]]-based scan for fixed-width files.
  *
@@ -57,7 +59,8 @@ case class FixedWidthFileScan(
    *  - `numPartitions` + multiple files → global target: split size
    *    `ceil(totalBytes / n)` fed into native bin-packing (the option no
    *    longer disables splitting);
-   *  - compressed files are never split, regardless.
+   *  - non-splittable codecs (gz) are never split; splittable codecs (bz2) are
+   *    split and read block-aligned by the reader.
    * Hive-style partitioned directory layouts use native planning — the
    * datasource options above are single-directory/file-list features.
    */
@@ -152,14 +155,31 @@ case class FixedWidthFileScan(
       case None => FWUtils.parseSkipLines(options)
     }
 
+    val encoding = Option(options.get(Keys.ENCODING)).getOrElse(FixedWidthConstants.DEFAULT_ENCODING)
+    val charset = Charset.forName(encoding) // fails early on unknown charset names (same as the reader would)
+
+    // lineSep (CSV name): explicit record delimiter for reading, encoded with `encoding`
+    // inside the reader. Default: LineRecordReader CR/LF/CRLF auto-detect, which scans
+    // raw bytes for 0x0A/0x0D. For charsets where LF is not the single byte 0x0A
+    // (EBCDIC Cp1047 = 0x15, UTF-16/32 multi-byte) fall back to an explicit "\n"
+    // so LF-terminated files keep working as before.
+    val lineSep: Option[String] = Option(options.get(Keys.LINE_SEP)).map { sep =>
+      if (sep.isEmpty) {
+        throw new IllegalArgumentException(FixedWidthConstants.ErrorMessages.emptyLineSep)
+      }
+      sep
+    }.orElse(if (FWUtils.lineFeedIsSingleByte(charset)) None else Some("\n"))
+
+    // lineEnding is a writer option; tolerate it on read with a one-time warning.
+    if (options.containsKey(Keys.LINE_ENDING)) FixedWidthFileScan.warnLineEndingIgnoredOnRead()
+
     FixedWidthFilePartitionReaderFactory(
       schema = readDataSchema,
       fieldLengths = fieldLengthsStr,
       mode = Option(options.get(Keys.MODE)).map(_.toUpperCase).getOrElse(
         FixedWidthConstants.DEFAULT_MODE),
       skipLines = skipLines,
-      encoding = Option(options.get(Keys.ENCODING)).getOrElse(
-        FixedWidthConstants.DEFAULT_ENCODING),
+      encoding = encoding,
       rescuedDataColumn = Option(options.get(Keys.RESCUED_DATA_COLUMN)),
       columnNameOfCorruptRecord = Option(options.get(Keys.COLUMN_NAME_OF_CORRUPT_RECORD)),
       ignoreLeadingWhiteSpace = ignoreLeading,
@@ -179,6 +199,7 @@ case class FixedWidthFileScan(
         FixedWidthConstants.DEFAULT_POSITIVE_INF),
       negativeInf = Option(options.get(Keys.NEGATIVE_INF)).getOrElse(
         FixedWidthConstants.DEFAULT_NEGATIVE_INF),
+      lineSep = lineSep,
       partitionSchema = readPartitionSchema,
       metadataSchema = readMetadataSchema,
       options = new FileSourceOptions(CaseInsensitiveMap(caseSensitiveMap))
@@ -192,4 +213,16 @@ case class FixedWidthFileScan(
   }
 
   override def hashCode(): Int = super.hashCode()
+}
+
+object FixedWidthFileScan {
+  private val logger = org.slf4j.LoggerFactory.getLogger(classOf[FixedWidthFileScan])
+  private val lineEndingWarned = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+  /** Logs once per JVM that the writer-only `lineEnding` option is ignored on read. */
+  private[fixedwidth] def warnLineEndingIgnoredOnRead(): Unit = {
+    if (lineEndingWarned.compareAndSet(false, true)) {
+      logger.warn(FixedWidthConstants.ErrorMessages.lineEndingIgnoredOnRead)
+    }
+  }
 }

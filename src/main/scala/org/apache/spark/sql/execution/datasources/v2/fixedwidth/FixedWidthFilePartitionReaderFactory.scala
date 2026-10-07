@@ -18,8 +18,10 @@ import com.alexandertimmer.fixedwidth.FixedWidthPartitionReader
  *
  * Bridges Spark's native [[PartitionedFile]] splits to the existing
  * [[FixedWidthPartitionReader]] (whose per-line parsing logic is unchanged):
- * path/start/length map directly, and `isFirstSplit` is `start == 0` — the
- * same first-split semantics the pre-migration planner produced. Reading rows
+ * path/start/length map directly, `isFirstSplit` is `start == 0` — the
+ * same first-split semantics the pre-migration planner produced — and the
+ * read-side `lineSep` delimiter is forwarded alongside the parsing options.
+ * Reading rows
  * through this factory also populates Spark's input-file metadata, which is
  * what makes `input_file_name()` work.
  *
@@ -46,6 +48,7 @@ case class FixedWidthFilePartitionReaderFactory(
     nanValue: String,
     positiveInf: String,
     negativeInf: String,
+    lineSep: Option[String],
     partitionSchema: StructType,
     metadataSchema: StructType,
     options: FileSourceOptions
@@ -91,7 +94,8 @@ case class FixedWidthFilePartitionReaderFactory(
       emptyValue = emptyValue,
       nanValue = nanValue,
       positiveInf = positiveInf,
-      negativeInf = negativeInf
+      negativeInf = negativeInf,
+      lineSep = lineSep
     )
     // Appends Hive-style partition-directory values (no-op for flat layouts)
     val withPartitionValues =
